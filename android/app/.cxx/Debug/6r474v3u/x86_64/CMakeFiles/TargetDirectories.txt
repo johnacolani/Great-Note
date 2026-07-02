@@ -1,0 +1,2 @@
+C:/All Apps/Great-Note/android/app/.cxx/Debug/6r474v3u/x86_64/CMakeFiles/edit_cache.dir
+C:/All Apps/Great-Note/android/app/.cxx/Debug/6r474v3u/x86_64/CMakeFiles/rebuild_cache.dir

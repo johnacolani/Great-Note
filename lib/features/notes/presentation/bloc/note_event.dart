@@ -66,3 +66,17 @@ class DeleteNote extends NoteEvent {
   @override
   List<Object> get props => [noteId, folderId];
 }
+
+// Event to search notes within a folder
+class SearchNotes extends NoteEvent {
+  final int folderId;
+  final String query;
+
+  const SearchNotes({
+    required this.folderId,
+    required this.query,
+  });
+
+  @override
+  List<Object> get props => [folderId, query];
+}

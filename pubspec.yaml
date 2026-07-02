@@ -37,9 +37,9 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter_bloc: ^9.1.1
   equatable: ^2.0.5
+  image_picker: ^1.1.2
   # google_sign_in: ^6.2.1
   google_fonts: ^6.2.1
-  image_picker: ^1.1.2
   path: ^1.9.0
   path_provider: ^2.1.4
   # provider: ^6.1.2
@@ -47,13 +47,14 @@ dependencies:
   flutter_colorpicker: ^1.1.0
   intl: ^0.20.2
   # shared_preferences: ^2.3.2
-  flutter_quill: ^11.4.2
+  flutter_quill: 11.5.1
   flutter_quill_extensions: ^11.0.0
   # hydrated_bloc: ^9.1.5
   google_mobile_ads: ^6.0.0
   share_plus: ^11.0.0
   pdf: ^3.11.1
   printing: ^5.13.4
+  sqflite_common_ffi_web: ^1.1.2
 
 dev_dependencies:
   flutter_test:

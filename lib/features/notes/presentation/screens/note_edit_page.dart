@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_quill/flutter_quill.dart' as quill;
 import 'package:flutter_quill/flutter_quill.dart';
+import 'package:flutter_quill_extensions/flutter_quill_extensions.dart';
 import 'package:greate_note_app/core/widgets/glossy_app_bar.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -83,7 +85,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
       final ImagePicker picker = ImagePicker();
       final XFile? image = await picker.pickImage(source: ImageSource.gallery);
       if (image != null) {
-        await _insertImageToNote(image.path);
+        await _insertImageToNote(image);
       }
     } catch (e) {
       debugPrint("Error picking image from gallery: $e");
@@ -96,7 +98,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
       final ImagePicker picker = ImagePicker();
       final XFile? image = await picker.pickImage(source: ImageSource.camera);
       if (image != null) {
-        await _insertImageToNote(image.path);
+        await _insertImageToNote(image);
       }
     } catch (e) {
       debugPrint("Error picking image from camera: $e");
@@ -104,34 +106,49 @@ class _NoteEditPageState extends State<NoteEditPage> {
     }
   }
 
-  Future<void> _insertImageToNote(String imagePath) async {
+  String _guessMimeType(String fileName) {
+    final lower = fileName.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.bmp')) return 'image/bmp';
+    return 'image/jpeg';
+  }
+
+  ImageProvider? _imageProviderFromSource(BuildContext context, String imageSource) {
+    final source = imageSource.trim();
+    if (source.startsWith('data:') && source.contains(',')) {
+      final base64Part = source.split(',').last;
+      return MemoryImage(base64Decode(base64Part));
+    }
+    return null;
+  }
+
+  Future<void> _insertImageToNote(XFile image) async {
     try {
-      // Copy image to app directory for persistence
-      final Directory appDir = await getApplicationDocumentsDirectory();
-      final String fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final String newPath = '${appDir.path}/$fileName';
+      final bytes = await image.readAsBytes();
+      final mimeType = image.mimeType ?? _guessMimeType(image.name);
+      final dataUri = 'data:$mimeType;base64,${base64Encode(bytes)}';
 
-      await File(imagePath).copy(newPath);
+      final selection = _quillController.selection;
+      final index = selection.baseOffset < 0
+          ? _quillController.document.length
+          : selection.baseOffset;
+      final length = selection.extentOffset - selection.baseOffset;
 
-      // Get current cursor position, default to end of document if invalid
-      int index = _quillController.selection.baseOffset;
-      if (index < 0 || index > _quillController.document.length) {
-        index = _quillController.document.length - 1;
-      }
+      _quillController.replaceText(
+        index,
+        length < 0 ? 0 : length,
+        quill.BlockEmbed.image(dataUri),
+        null,
+      );
 
-      // Insert image reference as text at cursor position
-      final imageText = '\n📷 $fileName\n';
-      _quillController.document.insert(index, imageText);
-
-      // Move cursor after the image reference
-      final newOffset = index + imageText.length;
       _quillController.updateSelection(
-        TextSelection.collapsed(offset: newOffset),
+        TextSelection.collapsed(offset: index + 1),
         ChangeSource.local,
       );
 
-      _showSnackBar("Image inserted at cursor position ✓");
-      debugPrint("Image saved to: $newPath at index: $index");
+      _showSnackBar('Image inserted');
     } catch (e) {
       debugPrint("Error inserting image: $e");
       _showSnackBar("Failed to add image: ${e.toString()}");
@@ -157,7 +174,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
   // Show image gallery with all images in the note
   void _showImageGallery() async {
     final text = _quillController.document.toPlainText();
-    final imagePattern = RegExp(r'📷 ([^\n]+)');
+    final imagePattern = RegExp(r'ðŸ“· ([^\n]+)');
     final matches = imagePattern.allMatches(text);
 
     if (matches.isEmpty) {
@@ -191,42 +208,33 @@ class _NoteEditPageState extends State<NoteEditPage> {
 
   // Build custom editor that shows both text and images
   Widget _buildCustomEditor() {
-    // Check if document has images
-    final plainText = _quillController.document.toPlainText();
-    final imagePattern = RegExp(r'📷 ([^\n]+)');
-    final hasImages = imagePattern.hasMatch(plainText);
-
-    if (!hasImages) {
-      // No images, just use regular editor
-      return quill.QuillEditor.basic(
-        controller: _quillController,
-        scrollController: _scrollController,
-        focusNode: _editorFocusNode,
-      );
-    }
-
-    // Has images, show editor with images below
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Main editable editor
-        Expanded(
-          child: quill.QuillEditor.basic(
-            controller: _quillController,
-            scrollController: _scrollController,
-            focusNode: _editorFocusNode,
-          ),
-        ),
-        // Images preview section with collapse/expand
-        _buildImagesPreview(),
-      ],
+    return quill.QuillEditor.basic(
+      controller: _quillController,
+      scrollController: _scrollController,
+      focusNode: _editorFocusNode,
+      config: quill.QuillEditorConfig(
+        expands: true,
+        padding: EdgeInsets.zero,
+        scrollBottomInset: MediaQuery.of(context).viewInsets.bottom + 24,
+        embedBuilders: kIsWeb
+            ? FlutterQuillEmbeds.editorWebBuilders(
+                imageEmbedConfig: QuillEditorImageEmbedConfig(
+                  imageProviderBuilder: _imageProviderFromSource,
+                ),
+              )
+            : FlutterQuillEmbeds.editorBuilders(
+                imageEmbedConfig: QuillEditorImageEmbedConfig(
+                  imageProviderBuilder: _imageProviderFromSource,
+                ),
+              ),
+      ),
     );
   }
 
   // Build images preview section with collapse/expand
   Widget _buildImagesPreview() {
     final plainText = _quillController.document.toPlainText();
-    final imagePattern = RegExp(r'📷 ([^\n]+)');
+    final imagePattern = RegExp(r'ðŸ“· ([^\n]+)');
     final matches = imagePattern.allMatches(plainText);
 
     final imageFiles = <String>[];
@@ -419,15 +427,15 @@ class _NoteEditPageState extends State<NoteEditPage> {
 
       // Try different patterns to find the image reference
       final patterns = [
-        RegExp('\\n📷 $escapedFileName\\n'), // With newlines
-        RegExp('📷 $escapedFileName\\n'), // With trailing newline
-        RegExp('\\n📷 $escapedFileName'), // With leading newline
-        RegExp('📷 $escapedFileName'), // Without newlines
+        RegExp('\\nðŸ“· $escapedFileName\\n'), // With newlines
+        RegExp('ðŸ“· $escapedFileName\\n'), // With trailing newline
+        RegExp('\\nðŸ“· $escapedFileName'), // With leading newline
+        RegExp('ðŸ“· $escapedFileName'), // Without newlines
       ];
 
       final plainText = _quillController.document.toPlainText();
       debugPrint("Document plain text length: ${plainText.length}");
-      debugPrint("Looking for: 📷 $fileName");
+      debugPrint("Looking for: ðŸ“· $fileName");
 
       RegExp? matchingPattern;
       for (final pattern in patterns) {
@@ -603,32 +611,35 @@ class _NoteEditPageState extends State<NoteEditPage> {
               ),
             ),
             // Rich Text Toolbar with improved design
-            Container(
-              height: 155,
-              decoration: BoxDecoration(
-                color: isDarkMode ? Colors.grey.shade900 : Colors.grey.shade100,
-                border: Border(
-                  top: BorderSide(
-                    color: isDarkMode
-                        ? Colors.grey.shade700
-                        : Colors.grey.shade300,
-                    width: 1,
+            AnimatedPadding(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: isDarkMode ? Colors.grey.shade900 : Colors.grey.shade100,
+                  border: Border(
+                    top: BorderSide(
+                      color: isDarkMode
+                          ? Colors.grey.shade700
+                          : Colors.grey.shade300,
+                      width: 1,
+                    ),
                   ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.1),
+                      blurRadius: 4,
+                      offset: const Offset(0, -2),
+                    ),
+                  ],
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 4,
-                    offset: const Offset(0, -2),
-                  ),
-                ],
-              ),
-              child: SingleChildScrollView(
-                child: Padding(
-                  padding: const EdgeInsets.all(12.0),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 12.0),
                   child: Wrap(
                     spacing: 6,
                     runSpacing: 6,
+                    alignment: WrapAlignment.start,
                     children: [
                       quill.QuillToolbarHistoryButton(
                         isUndo: true,
@@ -700,6 +711,9 @@ class _NoteEditPageState extends State<NoteEditPage> {
                           iconSize: 22,
                         ),
                       ),
+                      quill.QuillToolbarFontSizeButton(
+                        controller: _quillController,
+                      ),
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.ol,
                         controller: _quillController,
@@ -756,7 +770,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                           iconSize: 22,
                         ),
                       ),
-                      // Image picker buttons
                       IconButton(
                         onPressed: _pickImageFromGallery,
                         icon: const Icon(Icons.photo_library, size: 22),
@@ -768,9 +781,12 @@ class _NoteEditPageState extends State<NoteEditPage> {
                         tooltip: 'Take photo with camera',
                       ),
                       IconButton(
-                        onPressed: _showImageGallery,
+                        onPressed: () {
+                          _editorFocusNode.requestFocus();
+                          _showSnackBar('Images are now embedded in the note');
+                        },
                         icon: const Icon(Icons.image, size: 22),
-                        tooltip: 'View all images in note',
+                        tooltip: 'Images are embedded directly in the note',
                       ),
                     ],
                   ),
@@ -1034,3 +1050,5 @@ class _ImageGalleryScreenState extends State<ImageGalleryScreen> {
     );
   }
 }
+
+

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_quill/flutter_quill.dart';
@@ -5,6 +6,8 @@ import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:greate_note_app/core/theme/theme_bloc.dart';
 import 'package:greate_note_app/features/app_background/bloc/background_bloc.dart';
 import 'package:greate_note_app/features/app_background/data/data_source/background_local_data_source.dart';
+import 'package:greate_note_app/features/search/data/search_local_datasource.dart';
+import 'package:greate_note_app/features/search/presentation/bloc/search_bloc.dart';
 import 'package:greate_note_app/features/splash_feature/presentation/screens/bloc/splash_bloc.dart';
 import 'package:greate_note_app/features/splash_feature/presentation/screens/splash_screen.dart';
 import 'package:sqflite/sqflite.dart';
@@ -15,10 +18,16 @@ import 'features/folders/presentation/bloc/folder_event.dart';
 import 'features/notes/data/data_sources/note_local_datasource.dart';
 import 'features/notes/presentation/bloc/note_bloc.dart';
 import 'features/folders/data/datasources/folder_local_datasource.dart';
+import 'package:sqflite_common_ffi_web/sqflite_ffi_web.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  MobileAds.instance.initialize();
+
+  if (kIsWeb) {
+    databaseFactory = databaseFactoryFfiWeb;
+  } else {
+    await MobileAds.instance.initialize();
+  }
 
   try {
     // Initialize the database
@@ -28,6 +37,8 @@ void main() async {
     final FolderLocalDataSource folderLocalDataSource =
         FolderLocalDataSource(db);
     final NoteLocalDataSource noteLocalDataSource = NoteLocalDataSource(db);
+    final SearchLocalDataSource searchLocalDataSource =
+        SearchLocalDataSource(db);
     final backgroundLocalDataSource = BackgroundLocalDataSource(db);
 
     // Create the background bloc instance once
@@ -38,6 +49,7 @@ void main() async {
       child: MyApp(
         folderLocalDataSource: folderLocalDataSource,
         noteLocalDataSource: noteLocalDataSource,
+        searchLocalDataSource: searchLocalDataSource,
         backgroundLocalDataSource: backgroundLocalDataSource,
         backgroundBloc: backgroundBloc,
       ),
@@ -69,6 +81,7 @@ void main() async {
 class MyApp extends StatelessWidget {
   final FolderLocalDataSource folderLocalDataSource;
   final NoteLocalDataSource noteLocalDataSource;
+  final SearchLocalDataSource searchLocalDataSource;
   final BackgroundLocalDataSource backgroundLocalDataSource;
   final BackgroundBloc backgroundBloc;
 
@@ -76,6 +89,7 @@ class MyApp extends StatelessWidget {
     super.key,
     required this.folderLocalDataSource,
     required this.noteLocalDataSource,
+    required this.searchLocalDataSource,
     required this.backgroundLocalDataSource,
     required this.backgroundBloc,
   });
@@ -96,6 +110,9 @@ class MyApp extends StatelessWidget {
         ),
         BlocProvider(
           create: (context) => NoteBloc(noteLocalDataSource),
+        ),
+        BlocProvider(
+          create: (context) => SearchBloc(searchLocalDataSource),
         ),
         BlocProvider.value(
           value: backgroundBloc,

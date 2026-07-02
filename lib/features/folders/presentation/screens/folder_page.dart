@@ -8,6 +8,9 @@ import 'package:greate_note_app/features/app_background/bloc/background_bloc.dar
 import 'package:intl/intl.dart';
 import '../../../app_background/app_background.dart';
 import '../../../notes/data/data_sources/note_local_datasource.dart';
+import '../../../search/presentation/bloc/search_bloc.dart';
+import '../../../search/presentation/bloc/search_event.dart';
+import '../../../search/presentation/screens/search_results_page.dart';
 import '../../../notes/presentation/screens/note_page.dart';
 import '../bloc/folder_bloc.dart';
 import '../bloc/folder_event.dart';
@@ -292,7 +295,7 @@ class _FolderPageState extends State<FolderPage> {
                     ),
                     cursorColor: Colors.grey.shade400,
                     decoration: InputDecoration(
-                      hintText: 'Search folders...',
+                      hintText: 'Search notes across all folders...',
                       hintStyle: TextStyle(
                         color: Theme.of(context).brightness == Brightness.dark
                             ? Colors.grey.shade300
@@ -311,14 +314,19 @@ class _FolderPageState extends State<FolderPage> {
                         borderSide: BorderSide.none, // No visible border
                       ),
                     ),
-                    onChanged: (query) {
-                      context
-                          .read<FolderBloc>()
-                          .add(SearchFolders(query: query));
-                    },
+                    onChanged: (query) {},
                     onSubmitted: (query) {
-                      _searchController.clear();
-                      context.read<FolderBloc>().add(LoadFolders());
+                      final trimmed = query.trim();
+                      if (trimmed.isEmpty) return;
+                      context.read<SearchBloc>().add(SearchNotesOnly(query: trimmed));
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (context) => SearchResultsPage(
+                            query: trimmed,
+                            noteLocalDataSource: widget.noteLocalDataSource,
+                          ),
+                        ),
+                      );
                     },
                   ),
                 ),
@@ -461,11 +469,13 @@ class _FolderPageState extends State<FolderPage> {
                                       style: TextStyle(color: Colors.white),
                                     ),
                                   );
-                                } else {
+                                  } else {
                                   final notes = snapshot.data!;
                                   return ListView.builder(
-                                    shrinkWrap: true,
+                                    primary: false,
+                                    physics: const ClampingScrollPhysics(),
                                     itemCount: notes.length,
+                                    padding: EdgeInsets.zero,
                                     itemBuilder: (context, index) {
                                       final note = notes[index];
                                       return Padding(

@@ -1,4 +1,7 @@
-import 'package:bloc/bloc.dart';
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../data/data_source/background_local_data_source.dart';
@@ -21,8 +24,9 @@ class BackgroundBloc extends Bloc<BackgroundEvent, BackgroundState> {
 
       if (pickedFile != null) {
         try {
-          await backgroundDataSource.saveBackgroundImage(pickedFile.path);
-          emit(BackgroundLoaded(pickedFile.path));
+          final imageSource = await _normalizeImageSource(pickedFile);
+          await backgroundDataSource.saveBackgroundImage(imageSource);
+          emit(BackgroundLoaded(imageSource));
         } catch (e) {
           emit(BackgroundError('Failed to save background: ${e.toString()}'));
         }
@@ -37,8 +41,9 @@ class BackgroundBloc extends Bloc<BackgroundEvent, BackgroundState> {
 
       if (pickedFile != null) {
         try {
-          await backgroundDataSource.saveBackgroundImage(pickedFile.path);
-          emit(BackgroundLoaded(pickedFile.path));
+          final imageSource = await _normalizeImageSource(pickedFile);
+          await backgroundDataSource.saveBackgroundImage(imageSource);
+          emit(BackgroundLoaded(imageSource));
         } catch (e) {
           emit(BackgroundError('Failed to take photo: ${e.toString()}'));
         }
@@ -59,5 +64,24 @@ class BackgroundBloc extends Bloc<BackgroundEvent, BackgroundState> {
         emit(BackgroundError('Failed to load background: ${e.toString()}'));
       }
     });
+  }
+
+  String _guessMimeType(String fileName) {
+    final lower = fileName.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.gif')) return 'image/gif';
+    if (lower.endsWith('.bmp')) return 'image/bmp';
+    return 'image/jpeg';
+  }
+
+  Future<String> _normalizeImageSource(XFile pickedFile) async {
+    if (kIsWeb) {
+      final bytes = await pickedFile.readAsBytes();
+      final mimeType = pickedFile.mimeType ?? _guessMimeType(pickedFile.name);
+      return 'data:$mimeType;base64,${base64Encode(bytes)}';
+    }
+
+    return pickedFile.path;
   }
 }

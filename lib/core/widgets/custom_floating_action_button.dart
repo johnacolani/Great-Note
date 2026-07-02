@@ -25,7 +25,7 @@ class GlossyRectangularButton extends StatelessWidget {
               width: 60, // Custom width for the rectangular button
               height: 60, // Custom height for the rectangular button
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.2), // Semi-transparent overlay
+                color: Colors.white.withValues(alpha: 0.2), // Semi-transparent overlay
                 borderRadius: BorderRadius.circular(16), // Match the border radius of the blur
                 border: Border.all(
                   color: Colors.white, // White border
@@ -42,11 +42,11 @@ class GlossyRectangularButton extends StatelessWidget {
             width: 70, // Same size as the backdrop container
             height: 70,
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.3), // Glossy color effect
+              color: Colors.white.withValues(alpha: 0.3), // Glossy color effect
               borderRadius: BorderRadius.circular(16), // Rounded corners for the button
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.2), // Soft shadow effect
+                  color: Colors.black.withValues(alpha: 0.2), // Soft shadow effect
                   blurRadius: 10,
                   spreadRadius: 1,
                   offset: const Offset(0, 4), // Slight shadow below the button

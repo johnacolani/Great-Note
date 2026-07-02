@@ -6,9 +6,9 @@ abstract class BackgroundState {}
 class BackgroundInitial extends BackgroundState {}
 
 class BackgroundLoaded extends BackgroundState {
-  final String imagePath; // Path to the selected image
+  final String imageSource; // File path on mobile/desktop, data URI on web
 
-  BackgroundLoaded(this.imagePath);
+  BackgroundLoaded(this.imageSource);
 }
 
 class BackgroundError extends BackgroundState {

@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_quill/flutter_quill.dart' as quill;
+import 'package:flutter_quill_extensions/flutter_quill_extensions.dart';
 import 'package:greate_note_app/core/widgets/glossy_app_bar.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -208,314 +210,58 @@ class _NotePageState extends State<NotePage> {
     }
   }
 
-  // Build note content with images and formatting
+  ImageProvider? _imageProviderFromSource(BuildContext context, String imageSource) {
+    final source = imageSource.trim();
+    if (source.startsWith('data:') && source.contains(',')) {
+      final base64Part = source.split(',').last;
+      return MemoryImage(base64Decode(base64Part));
+    }
+    return null;
+  }
+
+  // Build note content with embedded images and formatting
   Widget _buildNoteContent(String description, ThemeData theme) {
     try {
-      final List<dynamic> content = jsonDecode(description) as List<dynamic>;
-      final doc = quill.Document.fromJson(content);
-      final plainText = doc.toPlainText();
-      
-      // Check if there are images in the content
-      final imagePattern = RegExp(r'📷 ([^\n]+)');
-      final hasImages = imagePattern.hasMatch(plainText);
-      
-      if (hasImages) {
-        // Build custom widget that preserves formatting and shows images
-        return _buildFormattedContentWithImages(doc, theme);
-      } else {
-        // No images, just display formatted content
-        final controller = quill.QuillController(
-          document: doc,
-          selection: const TextSelection.collapsed(offset: 0),
-        );
-        return IgnorePointer(
-          child: quill.QuillEditor.basic(
-            controller: controller,
-          ),
-        );
+      final decoded = jsonDecode(description);
+      if (decoded is! List) {
+        throw const FormatException('Note content is not a Quill delta');
       }
+
+      final doc = quill.Document.fromJson(List<dynamic>.from(decoded));
+      final controller = quill.QuillController(
+        document: doc,
+        selection: const TextSelection.collapsed(offset: 0),
+      );
+      controller.readOnly = true;
+
+      return IgnorePointer(
+        child: quill.QuillEditor.basic(
+          controller: controller,
+          config: quill.QuillEditorConfig(
+            scrollable: false,
+            expands: false,
+            padding: EdgeInsets.zero,
+            enableInteractiveSelection: false,
+            embedBuilders: kIsWeb
+                ? FlutterQuillEmbeds.editorWebBuilders(
+                    imageEmbedConfig: QuillEditorImageEmbedConfig(
+                      imageProviderBuilder: _imageProviderFromSource,
+                    ),
+                  )
+                : FlutterQuillEmbeds.editorBuilders(
+                    imageEmbedConfig: QuillEditorImageEmbedConfig(
+                      imageProviderBuilder: _imageProviderFromSource,
+                    ),
+                  ),
+          ),
+        ),
+      );
     } catch (e) {
       debugPrint("Error parsing note description: $e");
       return Text(
         description,
         style: theme.textTheme.bodyMedium,
       );
-    }
-  }
-  
-  // Build formatted content with images - preserving formatting
-  Widget _buildFormattedContentWithImages(quill.Document doc, ThemeData theme) {
-    final plainText = doc.toPlainText();
-    final imagePattern = RegExp(r'📷 ([^\n]+)');
-    final matches = imagePattern.allMatches(plainText).toList();
-    
-    if (matches.isEmpty) {
-      // No images found, just display formatted content
-      final controller = quill.QuillController(
-        document: doc,
-        selection: const TextSelection.collapsed(offset: 0),
-      );
-      return IgnorePointer(
-        child: quill.QuillEditor.basic(
-          controller: controller,
-        ),
-      );
-    }
-    
-    // Process document operations to build widgets with formatting and images interleaved
-    final delta = doc.toDelta();
-    final operations = delta.toJson();
-    final imagePatternInOps = RegExp(r'📷 ([^\n]+)');
-    
-    // Build segments: each segment is either formatted text or an image
-    final segments = <Map<String, dynamic>>[];
-    
-    for (final op in operations) {
-      final insert = op['insert'];
-      if (insert is String) {
-        // Check if this string contains image references
-        final imageMatches = imagePatternInOps.allMatches(insert);
-        int lastEnd = 0;
-        
-        for (final match in imageMatches) {
-          // Add text segment before image
-          if (match.start > lastEnd) {
-            final textBefore = insert.substring(lastEnd, match.start);
-            if (textBefore.isNotEmpty) {
-              segments.add({
-                'type': 'text',
-                'content': textBefore,
-                'attributes': op.containsKey('attributes') ? op['attributes'] : null,
-              });
-            }
-          }
-          
-          // Add image segment
-          final fileName = match.group(1)?.trim();
-          if (fileName != null) {
-            segments.add({
-              'type': 'image',
-              'fileName': fileName,
-            });
-          }
-          
-          lastEnd = match.end;
-        }
-        
-        // Add remaining text after last image
-        if (lastEnd < insert.length) {
-          final remainingText = insert.substring(lastEnd);
-          if (remainingText.isNotEmpty) {
-            segments.add({
-              'type': 'text',
-              'content': remainingText,
-              'attributes': op.containsKey('attributes') ? op['attributes'] : null,
-            });
-          }
-        }
-      } else {
-        // Non-text operations (preserve as-is)
-        segments.add({
-          'type': 'text',
-          'operation': Map<String, dynamic>.from(op),
-        });
-      }
-    }
-    
-    // Build widgets from segments
-    final widgets = <Widget>[];
-    final textOperations = <Map<String, dynamic>>[];
-    
-    for (final segment in segments) {
-      if (segment['type'] == 'image') {
-        // If we have accumulated text operations, render them first
-        if (textOperations.isNotEmpty) {
-          final textDoc = quill.Document.fromJson(textOperations);
-          final textController = quill.QuillController(
-            document: textDoc,
-            selection: const TextSelection.collapsed(offset: 0),
-          );
-          widgets.add(
-            IgnorePointer(
-              child: quill.QuillEditor.basic(
-                controller: textController,
-              ),
-            ),
-          );
-          textOperations.clear();
-        }
-        // Add image widget
-        widgets.add(_buildImageWidget(segment['fileName'] as String, theme));
-      } else {
-        // Accumulate text operations
-        if (segment.containsKey('operation')) {
-          textOperations.add(segment['operation']);
-        } else {
-          final textOp = <String, dynamic>{'insert': segment['content']};
-          if (segment['attributes'] != null) {
-            textOp['attributes'] = segment['attributes'];
-          }
-          textOperations.add(textOp);
-        }
-      }
-    }
-    
-    // Add any remaining text operations
-    if (textOperations.isNotEmpty) {
-      final textDoc = quill.Document.fromJson(textOperations);
-      final textController = quill.QuillController(
-        document: textDoc,
-        selection: const TextSelection.collapsed(offset: 0),
-      );
-      widgets.add(
-        IgnorePointer(
-          child: quill.QuillEditor.basic(
-            controller: textController,
-          ),
-        ),
-      );
-    }
-    
-    if (widgets.isEmpty) {
-      // Fallback: show full document
-      final controller = quill.QuillController(
-        document: doc,
-        selection: const TextSelection.collapsed(offset: 0),
-      );
-      return IgnorePointer(
-        child: quill.QuillEditor.basic(
-          controller: controller,
-        ),
-      );
-    }
-    
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: widgets,
-    );
-  }
-
-  // Legacy method - kept for backward compatibility but not used
-  // Build text content with inline images
-  Widget _buildTextWithImages(String text, ThemeData theme) {
-    final widgets = <Widget>[];
-    final imagePattern = RegExp(r'📷 ([^\n]+)');
-    int lastIndex = 0;
-
-    for (final match in imagePattern.allMatches(text)) {
-      // Add text before image
-      if (match.start > lastIndex) {
-        final textBefore = text.substring(lastIndex, match.start);
-        if (textBefore.trim().isNotEmpty) {
-          widgets.add(
-            Text(
-              textBefore,
-              style: theme.textTheme.bodyMedium,
-            ),
-          );
-        }
-      }
-
-      // Add image
-      final fileName = match.group(1)?.trim();
-      if (fileName != null) {
-        widgets.add(_buildImageWidget(fileName, theme));
-      }
-
-      lastIndex = match.end;
-    }
-
-    // Add remaining text
-    if (lastIndex < text.length) {
-      final remainingText = text.substring(lastIndex);
-      if (remainingText.trim().isNotEmpty) {
-        widgets.add(
-          Text(
-            remainingText,
-            style: theme.textTheme.bodyMedium,
-          ),
-        );
-      }
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: widgets.isEmpty
-          ? [
-              Text(
-                text,
-                style: theme.textTheme.bodyMedium,
-              ),
-            ]
-          : widgets,
-    );
-  }
-
-  // Build individual image widget for note cards
-  Widget _buildImageWidget(String fileName, ThemeData theme) {
-    return FutureBuilder<String?>(
-      future: _getImagePath(fileName),
-      builder: (context, snapshot) {
-        if (snapshot.hasData && snapshot.data != null) {
-          final imagePath = snapshot.data!;
-          if (File(imagePath).existsSync()) {
-            return Container(
-              margin: const EdgeInsets.symmetric(vertical: 8.0),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8.0),
-                child: Image.file(
-                  File(imagePath),
-                  fit: BoxFit.cover,
-                  width: double.infinity,
-                  height: 200,
-                  errorBuilder: (context, error, stackTrace) {
-                    return Container(
-                      height: 200,
-                      color: theme.brightness == Brightness.dark
-                          ? Colors.grey.shade700
-                          : Colors.grey.shade300,
-                      child: Center(
-                        child: Icon(
-                          Icons.broken_image,
-                          size: 50,
-                          color: theme.brightness == Brightness.dark
-                              ? Colors.white54
-                              : Colors.grey.shade600,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            );
-          }
-        }
-        return Container(
-          height: 200,
-          color: theme.brightness == Brightness.dark
-              ? Colors.grey.shade700
-              : Colors.grey.shade300,
-          child: Center(
-            child: Icon(
-              Icons.broken_image,
-              size: 50,
-              color: theme.brightness == Brightness.dark
-                  ? Colors.white54
-                  : Colors.grey.shade600,
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  // Get full image path from filename
-  Future<String?> _getImagePath(String fileName) async {
-    try {
-      final Directory appDir = await getApplicationDocumentsDirectory();
-      return '${appDir.path}/$fileName';
-    } catch (e) {
-      return null;
     }
   }
 
@@ -1051,3 +797,4 @@ class _NotePageState extends State<NotePage> {
     );
   }
 }
+
