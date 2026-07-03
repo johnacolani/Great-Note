@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:ui';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -9,10 +8,13 @@ import 'package:greate_note_app/core/widgets/custom_floating_action_button.dart'
 import 'package:greate_note_app/core/widgets/glossy_app_bar.dart';
 import 'package:greate_note_app/features/app_background/bloc/background_bloc.dart';
 import 'package:intl/intl.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../../app_background/app_background.dart';
 import '../../../notes/data/data_sources/note_local_datasource.dart';
+import '../../../search/presentation/bloc/search_bloc.dart';
+import '../../../search/presentation/bloc/search_event.dart';
+import '../../../search/presentation/bloc/search_state.dart';
+import '../../../notes/presentation/bloc/note_bloc.dart';
 import '../../../notes/presentation/screens/note_page.dart';
 import '../bloc/folder_bloc.dart';
 import '../bloc/folder_event.dart';
@@ -116,6 +118,10 @@ class _FolderPageState extends State<FolderPage> {
             onSelected: (value) {
               if (value == 'export') {
                 _exportBackup(context);
+              } else if (value == 'export_notes') {
+                _exportNotesZip(context);
+              } else if (value == 'save') {
+                _saveBackupFile(context);
               } else if (value == 'import') {
                 _importBackup(context);
               }
@@ -126,6 +132,22 @@ class _FolderPageState extends State<FolderPage> {
                 child: ListTile(
                   leading: Icon(Icons.backup_outlined),
                   title: Text('Backup (export ZIP)'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'save',
+                child: ListTile(
+                  leading: Icon(Icons.save_alt),
+                  title: Text('Save backup file'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'export_notes',
+                child: ListTile(
+                  leading: Icon(Icons.note_alt_outlined),
+                  title: Text('Export notes as ZIP'),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
@@ -157,8 +179,16 @@ class _FolderPageState extends State<FolderPage> {
               left: MediaQuery.of(context).size.width * 0.03,
               right: MediaQuery.of(context).size.width * 0.03,
             ),
-            child: BlocBuilder<FolderBloc, FolderState>(
-              builder: (context, state) {
+            child: BlocListener<NoteBloc, NoteState>(
+              listenWhen: (previous, current) =>
+                  current is NotesLoaded || current is NoteError,
+              listener: (context, state) {
+                if (mounted) {
+                  setState(() {});
+                }
+              },
+              child: BlocBuilder<FolderBloc, FolderState>(
+                builder: (context, state) {
                 if (state is FolderLoading) {
                   // Shimmer loading effect
                   return GridView.builder(
@@ -294,7 +324,8 @@ class _FolderPageState extends State<FolderPage> {
                 } else {
                   return const Center(child: Text('No folders found'));
                 }
-              },
+                },
+              ),
             ),
           ),
           SafeArea(
@@ -330,7 +361,7 @@ class _FolderPageState extends State<FolderPage> {
                     ),
                     cursorColor: Colors.grey.shade400,
                     decoration: InputDecoration(
-                      hintText: 'Search folders...',
+                      hintText: 'Search notes across all folders...',
                       hintStyle: TextStyle(
                         color: Theme.of(context).brightness == Brightness.dark
                             ? Colors.grey.shade300
@@ -348,21 +379,57 @@ class _FolderPageState extends State<FolderPage> {
                         borderRadius: BorderRadius.circular(8.0),
                         borderSide: BorderSide.none, // No visible border
                       ),
+                      suffixIcon: _searchController.text.isNotEmpty
+                          ? IconButton(
+                              tooltip: 'Cancel search',
+                              icon: const Icon(Icons.cancel),
+                              onPressed: () {
+                                _searchController.clear();
+                                FocusScope.of(context).unfocus();
+                                context.read<SearchBloc>().add(const ClearSearch());
+                                setState(() {});
+                                context.read<FolderBloc>().add(LoadFolders());
+                              },
+                            )
+                          : null,
                     ),
                     onChanged: (query) {
-                      context
-                          .read<FolderBloc>()
-                          .add(SearchFolders(query: query));
+                      final trimmed = query.trim();
+                      if (trimmed.isEmpty) {
+                        context.read<SearchBloc>().add(const ClearSearch());
+                        context.read<FolderBloc>().add(LoadFolders());
+                      } else {
+                        context.read<SearchBloc>().add(
+                              SearchNotesOnly(query: trimmed),
+                            );
+                      }
+                      setState(() {});
                     },
                     onSubmitted: (query) {
-                      _searchController.clear();
-                      context.read<FolderBloc>().add(LoadFolders());
+                      final trimmed = query.trim();
+                      if (trimmed.isEmpty) {
+                        context.read<SearchBloc>().add(const ClearSearch());
+                        context.read<FolderBloc>().add(LoadFolders());
+                        return;
+                      }
+                      FocusScope.of(context).unfocus();
                     },
                   ),
                 ),
               ),
             ),
           ),
+          if (_searchController.text.trim().isNotEmpty)
+            Positioned(
+              top: MediaQuery.of(context).size.height * 0.11 + 68,
+              left: MediaQuery.of(context).size.width * 0.03,
+              right: MediaQuery.of(context).size.width * 0.03,
+              child: BlocBuilder<SearchBloc, SearchState>(
+                builder: (context, state) {
+                  return _buildLiveSearchPanel(context, state, isDarkMode);
+                },
+              ),
+            ),
         ],
       ),
       floatingActionButton: Row(
@@ -403,143 +470,241 @@ class _FolderPageState extends State<FolderPage> {
     );
   }
 
-  Stack buildCard(Map<String, dynamic> folder, BuildContext context) {
+  Widget buildCard(Map<String, dynamic> folder, BuildContext context) {
     final createdAt = folder['createdAt'] as DateTime; // Extract timestamp
     final formattedDate = DateFormat.yMMMd().add_jm().format(createdAt);
 
-    return Stack(
-      children: [
-        Card(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Card(
           color: Color(int.parse(folder['color']))
               .withValues(alpha: 0.5), // Semi-transparent folder color
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // Title, date, and delete button
-              Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Expanded(
-                          child: Text(
-                            folder['name'],
-                            maxLines: 1, // Ensures the title is on one line
-                            style: const TextStyle(
-                              fontSize: 18,
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
+          child: SizedBox.expand(
+            child: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          folder['name'],
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
-                        IconButton(
-                          icon: const Icon(Icons.delete, color: Colors.white),
-                          onPressed: () async {
-                            await _confirmAndDeleteFolder(context, folder);
-                          },
+                      ),
+                      const SizedBox(width: 4),
+                      InkResponse(
+                        onTap: () async {
+                          await _confirmAndDeleteFolder(context, folder);
+                        },
+                        radius: 20,
+                        child: const Padding(
+                          padding: EdgeInsets.all(4.0),
+                          child: Icon(Icons.delete, color: Colors.white),
                         ),
-                      ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    formattedDate,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
                     ),
-                    // const SizedBox(height: 4),
-                    Text(
-                      formattedDate, // Display formatted timestamp
-                      style:
-                          const TextStyle(color: Colors.white70, fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(10.0),
-                  child: Container(
-                    width: double.infinity,
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(
-                          alpha:
-                              0.2), // More transparency for the note container
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Column(
-                      children: [
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.all(8.0),
-                            child: FutureBuilder<List<Map<String, dynamic>>>(
-                              future: widget.noteLocalDataSource
-                                  .getNotesForFolder(folder['id']),
-                              builder: (context, snapshot) {
-                                if (snapshot.connectionState ==
-                                    ConnectionState.waiting) {
-                                  return const Align(
-                                    alignment: Alignment.center,
-                                    child: SizedBox(
-                                      height: 30,
-                                      width: 30,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 1,
-                                        color: Colors.white,
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: Container(
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(8.0),
+                        child: FutureBuilder<List<Map<String, dynamic>>>(
+                          future: widget.noteLocalDataSource
+                              .getNotesForFolder(folder['id']),
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState ==
+                                ConnectionState.waiting) {
+                              return const Center(
+                                child: SizedBox(
+                                  height: 24,
+                                  width: 24,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 1,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              );
+                            } else if (snapshot.hasError) {
+                              return const Center(
+                                child: Text(
+                                  'Error loading notes',
+                                  style: TextStyle(color: Colors.white),
+                                  textAlign: TextAlign.center,
+                                ),
+                              );
+                            } else if (!snapshot.hasData ||
+                                snapshot.data!.isEmpty) {
+                              return const Center(
+                                child: Text(
+                                  'ADD NOTE',
+                                  style: TextStyle(color: Colors.white),
+                                  textAlign: TextAlign.center,
+                                ),
+                              );
+                            } else {
+                              final notes = snapshot.data!;
+                              return ListView.builder(
+                                primary: false,
+                                physics: const ClampingScrollPhysics(),
+                                itemCount: notes.length,
+                                itemBuilder: (context, index) {
+                                  final note = notes[index];
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 2.0),
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.7),
+                                        borderRadius:
+                                            BorderRadius.circular(4.0),
+                                      ),
+                                      child: Padding(
+                                        padding: const EdgeInsets.all(4.0),
+                                        child: Text(
+                                          note['title']?.toString() ??
+                                              'Untitled',
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            color: Colors.black,
+                                          ),
+                                        ),
                                       ),
                                     ),
                                   );
-                                } else if (snapshot.hasError) {
-                                  return const Text('Error loading notes');
-                                } else if (!snapshot.hasData ||
-                                    snapshot.data!.isEmpty) {
-                                  return const Padding(
-                                    padding: EdgeInsets.all(8.0),
-                                    child: Text(
-                                      'ADD NOTE',
-                                      style: TextStyle(color: Colors.white),
-                                    ),
-                                  );
-                                } else {
-                                  final notes = snapshot.data!;
-                                  return ListView.builder(
-                                    shrinkWrap: true,
-                                    itemCount: notes.length,
-                                    itemBuilder: (context, index) {
-                                      final note = notes[index];
-                                      return Padding(
-                                        padding: const EdgeInsets.all(2.0),
-                                        child: Container(
-                                          decoration: BoxDecoration(
-                                              color: Colors.white
-                                                  .withValues(alpha: 0.7),
-                                              borderRadius:
-                                                  BorderRadius.circular(4.0)),
-                                          child: Padding(
-                                            padding: const EdgeInsets.all(4.0),
-                                            child: Text(
-                                              note['title'],
-                                              style: const TextStyle(
-                                                  color: Colors.black),
-                                            ),
-                                          ),
-                                        ),
-                                      );
-                                    },
-                                  );
-                                }
-                              },
-                            ),
-                          ),
+                                },
+                              );
+                            }
+                          },
                         ),
-                      ],
+                      ),
                     ),
                   ),
-                ),
+                ],
               ),
-            ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildLiveSearchPanel(
+    BuildContext context,
+    SearchState state,
+    bool isDarkMode,
+  ) {
+    final query = _searchController.text.trim();
+
+    Widget child;
+    if (state is SearchLoading) {
+      child = const Center(
+        child: SizedBox(
+          height: 28,
+          width: 28,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      );
+    } else if (state is SearchLoaded && state.query == query) {
+      if (state.notes.isEmpty) {
+        child = const Center(
+          child: Text('No matching notes found'),
+        );
+      } else {
+        child = ListView.separated(
+          padding: EdgeInsets.zero,
+          shrinkWrap: true,
+          itemCount: state.notes.length,
+          separatorBuilder: (_, __) => Divider(
+            height: 1,
+            color: isDarkMode ? Colors.white12 : Colors.black12,
+          ),
+          itemBuilder: (context, index) {
+            final note = state.notes[index];
+            return ListTile(
+              dense: true,
+              leading: Icon(
+                Icons.note_alt_outlined,
+                color: isDarkMode ? Colors.white70 : Colors.black54,
+              ),
+              title: Text(
+                note['title']?.toString() ?? 'Untitled',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(
+                note['folder_name']?.toString() ?? '',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => NotePage(
+                      folderId: note['folder_id'],
+                      folderName: note['folder_name']?.toString() ?? 'Folder',
+                      initialSearchQuery: query,
+                      initialExpandedNoteId: note['id'],
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        );
+      }
+    } else {
+      child = const Center(
+        child: Text('Type to search notes'),
+      );
+    }
+
+    return Material(
+      elevation: 12,
+      color: isDarkMode ? Colors.grey.shade900 : Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.35,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: child,
           ),
         ),
-      ],
+      ),
     );
   }
 
@@ -565,20 +730,92 @@ class _FolderPageState extends State<FolderPage> {
       final service = BackupService(widget.noteLocalDataSource.db);
       final result = await service.exportBackup();
 
-      final tempDir = await getTemporaryDirectory();
-      final file = File('${tempDir.path}/${result.fileName}');
-      await file.writeAsBytes(result.bytes, flush: true);
-
       await SharePlus.instance.share(
         ShareParams(
-          files: [XFile(file.path)],
+          files: [
+            XFile.fromData(
+              result.bytes,
+              name: result.fileName,
+              mimeType: 'application/zip',
+            ),
+          ],
+          fileNameOverrides: [result.fileName],
           subject: 'Great Note backup',
-          text: 'Great Note backup',
         ),
       );
     } catch (e) {
       messenger.showSnackBar(
         SnackBar(content: Text('Backup failed: $e')),
+      );
+    }
+  }
+
+  Future<void> _saveBackupFile(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Preparing backup file…')),
+    );
+    try {
+      final service = BackupService(widget.noteLocalDataSource.db);
+      final result = await service.exportBackup();
+
+      final savedPath = await FilePicker.saveFile(
+        dialogTitle: 'Save Great Note backup',
+        fileName: result.fileName,
+        type: FileType.custom,
+        allowedExtensions: ['zip'],
+        bytes: result.bytes,
+      );
+
+      if (!context.mounted) return;
+      if (savedPath == null) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Backup save cancelled.')),
+        );
+        return;
+      }
+
+      messenger.showSnackBar(
+        SnackBar(content: Text('Backup saved to: $savedPath')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Save failed: $e')),
+      );
+    }
+  }
+
+  Future<void> _exportNotesZip(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Preparing notes export ZIP…')),
+    );
+    try {
+      final service = BackupService(widget.noteLocalDataSource.db);
+      final result = await service.exportNotesZip();
+
+      final savedPath = await FilePicker.saveFile(
+        dialogTitle: 'Save notes export ZIP',
+        fileName: result.fileName,
+        type: FileType.custom,
+        allowedExtensions: ['zip'],
+        bytes: result.bytes,
+      );
+
+      if (!context.mounted) return;
+      if (savedPath == null) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('Notes export cancelled.')),
+        );
+        return;
+      }
+
+      messenger.showSnackBar(
+        SnackBar(content: Text('Notes exported to: $savedPath')),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Notes export failed: $e')),
       );
     }
   }

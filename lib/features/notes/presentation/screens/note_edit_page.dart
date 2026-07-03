@@ -598,6 +598,18 @@ class _NoteEditPageState extends State<NoteEditPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDarkMode = theme.brightness == Brightness.dark;
+    final toolbarIconTheme = QuillIconTheme(
+      iconButtonSelectedData: IconButtonData(
+        style: ButtonStyle(
+          backgroundColor:
+              WidgetStatePropertyAll(Colors.grey.shade300),
+          foregroundColor: const WidgetStatePropertyAll(Colors.black87),
+          overlayColor: const WidgetStatePropertyAll(Colors.black12),
+        ),
+      ),
+    );
+    final toolbarBaseOptions =
+        QuillToolbarBaseButtonOptions(iconTheme: toolbarIconTheme);
 
     return Scaffold(
       appBar: GlossyAppBar(
@@ -705,6 +717,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarHistoryButton(
                         isUndo: true,
                         controller: _quillController,
+                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarHistoryButtonOptions(
                           iconData: Icons.undo,
                           iconSize: 22,
@@ -713,6 +726,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarHistoryButton(
                         isUndo: false,
                         controller: _quillController,
+                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarHistoryButtonOptions(
                           iconData: Icons.redo,
                           iconSize: 22,
@@ -721,6 +735,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.bold,
                         controller: _quillController,
+                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_bold,
                           iconSize: 22,
@@ -729,6 +744,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.italic,
                         controller: _quillController,
+                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_italic,
                           iconSize: 22,
@@ -737,6 +753,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.underline,
                         controller: _quillController,
+                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_underline,
                           iconSize: 22,
@@ -744,6 +761,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       ),
                       quill.QuillToolbarClearFormatButton(
                         controller: _quillController,
+                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarClearFormatButtonOptions(
                           iconData: Icons.format_clear,
                           iconSize: 22,
@@ -752,6 +770,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarColorButton(
                         controller: _quillController,
                         isBackground: false,
+                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarColorButtonOptions(
                           iconData: Icons.color_lens,
                           iconSize: 22,
@@ -760,6 +779,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarColorButton(
                         controller: _quillController,
                         isBackground: true,
+                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarColorButtonOptions(
                           iconData: Icons.format_color_fill,
                           iconSize: 22,
@@ -767,6 +787,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       ),
                       quill.QuillToolbarSelectHeaderStyleDropdownButton(
                         controller: _quillController,
+                        baseOptions: toolbarBaseOptions,
                         options:
                             const QuillToolbarSelectHeaderStyleDropdownButtonOptions(
                           iconSize: 22,
@@ -774,10 +795,12 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       ),
                       quill.QuillToolbarFontSizeButton(
                         controller: _quillController,
+                        baseOptions: toolbarBaseOptions,
                       ),
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.ol,
                         controller: _quillController,
+                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_list_numbered,
                           iconSize: 22,
@@ -786,6 +809,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.ul,
                         controller: _quillController,
+                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_list_bulleted,
                           iconSize: 22,
@@ -794,6 +818,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.leftAlignment,
                         controller: _quillController,
+                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_align_left,
                           iconSize: 22,
@@ -802,6 +827,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.centerAlignment,
                         controller: _quillController,
+                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_align_center,
                           iconSize: 22,
@@ -810,6 +836,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.rightAlignment,
                         controller: _quillController,
+                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_align_right,
                           iconSize: 22,
@@ -818,6 +845,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.justifyAlignment,
                         controller: _quillController,
+                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_align_justify,
                           iconSize: 22,
@@ -826,6 +854,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.codeBlock,
                         controller: _quillController,
+                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.code,
                           iconSize: 22,

@@ -25,12 +25,16 @@ class NotePage extends StatefulWidget {
   final int folderId;
   final String folderName;
   final String? folderColor;
+  final String? initialSearchQuery;
+  final int? initialExpandedNoteId;
 
   const NotePage({
     super.key,
     required this.folderId,
     required this.folderName,
     this.folderColor,
+    this.initialSearchQuery,
+    this.initialExpandedNoteId,
   });
 
   @override
@@ -40,7 +44,11 @@ class NotePage extends StatefulWidget {
 class _NotePageState extends State<NotePage> {
   late String _folderName;
   String? _folderColor;
+  late String _searchHighlightQuery;
   final Set<int> _expandedNotes = {};
+  final Map<int, int> _activeSearchMatchIndexByNote = {};
+  final Map<String, GlobalKey> _searchMatchKeys = {};
+  final Set<String> _centeredSearchMatchTargets = {};
   final TextEditingController _searchController = TextEditingController();
   List<Map<String, dynamic>> _filteredNotes = [];
   List<Map<String, dynamic>> _allNotes = [];
@@ -51,6 +59,10 @@ class _NotePageState extends State<NotePage> {
     super.initState();
     _folderName = widget.folderName;
     _folderColor = widget.folderColor;
+    _searchHighlightQuery = widget.initialSearchQuery?.trim() ?? '';
+    if (widget.initialExpandedNoteId != null) {
+      _expandedNotes.add(widget.initialExpandedNoteId!);
+    }
     // FIXED: Load notes once in initState instead of in build()
     context.read<NoteBloc>().add(LoadNotes(folderId: widget.folderId));
   }
@@ -440,8 +452,8 @@ class _NotePageState extends State<NotePage> {
                                     IconButton(
                                       icon: Icon(Icons.delete,
                                           color: theme.iconTheme.color),
-                                      onPressed: () {
-                                        _deleteNoteWithUndo(context, note);
+                                    onPressed: () {
+                                        _confirmDeleteNote(context, note);
                                       },
                                     ),
                                     IconButton(
@@ -484,10 +496,19 @@ class _NotePageState extends State<NotePage> {
                                             style: theme.textTheme.bodyMedium,
                                           ),
                                           const SizedBox(height: 8),
-                                          if (note['description'] != null &&
+                                          if (_searchHighlightQuery.isNotEmpty)
+                                            _buildSearchMatchNavigator(
+                                              noteId: note['id'] as int,
+                                              description:
+                                                  note['description'] ?? '',
+                                              theme: theme,
+                                            )
+                                          else if (note['description'] != null &&
                                               note['description'].isNotEmpty)
                                             _buildNoteContent(
-                                                note['description'], theme)
+                                              note['description'],
+                                              theme,
+                                            )
                                           else
                                             Text(
                                               'No description available.',
@@ -597,6 +618,248 @@ class _NotePageState extends State<NotePage> {
         icon: Icons.add,
       ),
     );
+  }
+
+  Widget _buildSearchMatchNavigator({
+    required int noteId,
+    required String description,
+    required ThemeData theme,
+  }) {
+    final query = _searchHighlightQuery.trim();
+    if (query.isEmpty) return const SizedBox.shrink();
+
+    final plainText = parseDescription(description);
+    final matches = _findSearchMatches(plainText, query);
+    if (matches.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final activeIndex =
+        (_activeSearchMatchIndexByNote[noteId] ?? 0).clamp(0, matches.length - 1);
+    final activeTargetKey = '$noteId:$activeIndex:$query';
+    final activeMatchKey = _searchMatchKeyFor(activeTargetKey);
+
+    if (!_centeredSearchMatchTargets.contains(activeTargetKey)) {
+      _centeredSearchMatchTargets.add(activeTargetKey);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final targetContext = activeMatchKey.currentContext;
+        if (targetContext == null) return;
+        Scrollable.ensureVisible(
+          targetContext,
+          alignment: 0.45,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeInOut,
+        );
+      });
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              onPressed: activeIndex > 0
+                  ? () {
+                      final nextIndex = activeIndex - 1;
+                      setState(() {
+                        _activeSearchMatchIndexByNote[noteId] = nextIndex;
+                      });
+                      _scrollToSearchMatch(noteId, nextIndex, query);
+                    }
+                  : null,
+              icon: const Icon(Icons.keyboard_arrow_up),
+              tooltip: 'Previous match',
+            ),
+            Text(
+              'Match ${activeIndex + 1}/${matches.length}',
+              style: theme.textTheme.titleSmall,
+            ),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              onPressed: activeIndex < matches.length - 1
+                  ? () {
+                      final nextIndex = activeIndex + 1;
+                      setState(() {
+                        _activeSearchMatchIndexByNote[noteId] = nextIndex;
+                      });
+                      _scrollToSearchMatch(noteId, nextIndex, query);
+                    }
+                  : null,
+              icon: const Icon(Icons.keyboard_arrow_down),
+              tooltip: 'Next match',
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.95,
+          ),
+          child: RichText(
+            textAlign: TextAlign.start,
+            text: TextSpan(
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.textTheme.bodyMedium?.color,
+                height: 1.45,
+              ),
+              children: _buildHighlightedFullTextSpans(
+                text: _descriptionToPlainText(description),
+                query: query,
+                activeMatchIndex: activeIndex,
+                activeMatchKey: activeMatchKey,
+                baseStyle: theme.textTheme.bodyMedium ?? const TextStyle(),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  GlobalKey _searchMatchKeyFor(String targetKey) {
+    return _searchMatchKeys.putIfAbsent(targetKey, () => GlobalKey());
+  }
+
+  void _scrollToSearchMatch(int noteId, int matchIndex, String query) {
+    final targetKey = '$noteId:$matchIndex:$query';
+    final targetMatchKey = _searchMatchKeyFor(targetKey);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final targetContext = targetMatchKey.currentContext;
+      if (targetContext == null) return;
+      Scrollable.ensureVisible(
+        targetContext,
+        alignment: 0.45,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeInOut,
+      );
+    });
+  }
+
+  List<String> _findSearchMatches(String text, String query) {
+    if (text.isEmpty || query.isEmpty) return const [];
+
+    final lowerText = text.toLowerCase();
+    final lowerQuery = query.toLowerCase();
+    final matches = <String>[];
+    var start = 0;
+    const contextLength = 60;
+
+    while (true) {
+      final index = lowerText.indexOf(lowerQuery, start);
+      if (index < 0) break;
+
+      final snippetStart = (index - contextLength).clamp(0, text.length);
+      final snippetEnd =
+          (index + lowerQuery.length + contextLength).clamp(0, text.length);
+      matches.add(text.substring(snippetStart, snippetEnd).trim());
+      start = index + lowerQuery.length;
+    }
+
+    return matches;
+  }
+
+  List<InlineSpan> _buildHighlightedFullTextSpans({
+    required String text,
+    required String query,
+    required int activeMatchIndex,
+    required GlobalKey activeMatchKey,
+    required TextStyle baseStyle,
+  }) {
+    if (query.trim().isEmpty || text.isEmpty) {
+      return [TextSpan(text: text, style: baseStyle)];
+    }
+
+    final spans = <InlineSpan>[];
+    final lowerText = text.toLowerCase();
+    final lowerQuery = query.toLowerCase();
+    var start = 0;
+    var matchIndex = 0;
+
+    while (true) {
+      final index = lowerText.indexOf(lowerQuery, start);
+      if (index < 0) {
+        if (start < text.length) {
+          spans.add(TextSpan(text: text.substring(start), style: baseStyle));
+        }
+        break;
+      }
+
+      if (index > start) {
+        spans.add(TextSpan(
+          text: text.substring(start, index),
+          style: baseStyle,
+        ));
+      }
+
+      final matchText = text.substring(index, index + query.length);
+      final isActiveMatch = matchIndex == activeMatchIndex;
+      final matchStyle = baseStyle.copyWith(
+        backgroundColor: isActiveMatch
+            ? Colors.amber.withValues(alpha: 0.6)
+            : Colors.yellow.withValues(alpha: 0.35),
+        fontWeight: FontWeight.w700,
+      );
+
+      if (isActiveMatch) {
+        spans.add(
+          WidgetSpan(
+            child: Container(
+              key: activeMatchKey,
+              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+              decoration: BoxDecoration(
+                color: Colors.amber.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                matchText,
+                style: matchStyle,
+              ),
+            ),
+          ),
+        );
+      } else {
+        spans.add(
+          TextSpan(
+            text: matchText,
+            style: matchStyle,
+          ),
+        );
+      }
+
+      start = index + query.length;
+      matchIndex++;
+    }
+
+    return spans;
+  }
+
+  String _descriptionToPlainText(String? description) {
+    if (description == null || description.isEmpty) {
+      return '';
+    }
+
+    try {
+      if (description.startsWith('{') || description.startsWith('[')) {
+        final decoded = jsonDecode(description);
+
+        if (decoded is List<dynamic>) {
+          return decoded.map((op) => op['insert']?.toString() ?? '').join();
+        } else if (decoded is Map<String, dynamic> && decoded['ops'] is List) {
+          return (decoded['ops'] as List<dynamic>)
+              .map((op) => op['insert']?.toString() ?? '')
+              .join();
+        }
+      }
+      return description;
+    } catch (e) {
+      debugPrint('Error parsing plain text description: $e');
+      return description;
+    }
   }
 
   String parseDescription(String? description) {
@@ -765,8 +1028,36 @@ class _NotePageState extends State<NotePage> {
     );
   }
 
-  // Delete a note immediately and offer an Undo via a snackbar.
-  void _deleteNoteWithUndo(BuildContext context, Map<String, dynamic> note) {
+  Future<void> _confirmDeleteNote(
+      BuildContext context, Map<String, dynamic> note) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Delete note?'),
+          content: Text(
+            'Delete "${(note['title'] ?? 'Untitled Note').toString()}"? This cannot be undone.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true || !context.mounted) return;
+
     final messenger = ScaffoldMessenger.of(context);
     final noteBloc = context.read<NoteBloc>();
 

@@ -93,6 +93,69 @@ class BackupService {
     return BackupResult(zipBytes, fileName);
   }
 
+  Future<BackupResult> exportNotesZip() async {
+    final folders = await db.query('folders');
+    final notes = await db.rawQuery('''
+      SELECT n.id, n.folder_id, n.title, n.description, f.name as folder_name
+      FROM notes n
+      INNER JOIN folders f ON n.folder_id = f.id
+      ORDER BY f.name ASC, n.title ASC
+    ''');
+
+    final archive = Archive();
+    final exportedAt = DateTime.now().toIso8601String();
+
+    archive.add(
+      ArchiveFile.string(
+        'notes_manifest.json',
+        jsonEncode({
+          'exportedAt': exportedAt,
+          'folderCount': folders.length,
+          'noteCount': notes.length,
+          'format': 'md',
+        }),
+      ),
+    );
+
+    for (final note in notes) {
+      final folderName = _sanitizeFileName(
+        (note['folder_name'] ?? 'Folder').toString(),
+        fallback: 'Folder',
+      );
+      final noteTitle = _sanitizeFileName(
+        (note['title'] ?? 'Untitled').toString(),
+        fallback: 'Untitled',
+      );
+      final noteId = note['id']?.toString() ?? '0';
+      final description = _noteDescriptionToPlainText(
+        (note['description'] ?? '').toString(),
+      );
+
+      final filePath =
+          'notes/$folderName/${noteTitle}_${noteId}.md';
+      final content = StringBuffer()
+        ..writeln('# ${(note['title'] ?? 'Untitled').toString()}')
+        ..writeln()
+        ..writeln('Folder: ${(note['folder_name'] ?? 'Folder').toString()}')
+        ..writeln('Note ID: $noteId')
+        ..writeln('Exported: $exportedAt')
+        ..writeln()
+        ..writeln('---')
+        ..writeln()
+        ..writeln(description.isEmpty ? 'No content.' : description);
+
+      archive.add(ArchiveFile.string(filePath, content.toString()));
+    }
+
+    final zipBytes = ZipEncoder().encodeBytes(archive);
+    final now = DateTime.now();
+    final fileName = 'great_note_notes_export_${now.year}${_two(now.month)}'
+        '${_two(now.day)}_${_two(now.hour)}${_two(now.minute)}'
+        '${_two(now.second)}.zip';
+
+    return BackupResult(zipBytes, fileName);
+  }
+
   // ---------------------------------------------------------------------------
   // Import (replace everything)
   // ---------------------------------------------------------------------------
@@ -196,5 +259,40 @@ class BackupService {
         await db.insert('backgrounds', {'image_path': bgValue});
       }
     }
+  }
+
+  String _sanitizeFileName(String input, {required String fallback}) {
+    final cleaned = input
+        .replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1F]'), '_')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim()
+        .replaceAll(RegExp(r'[. ]+$'), '');
+    if (cleaned.isEmpty) return fallback;
+    return cleaned.length > 80 ? cleaned.substring(0, 80).trim() : cleaned;
+  }
+
+  String _noteDescriptionToPlainText(String description) {
+    if (description.trim().isEmpty) return '';
+
+    try {
+      final parsed = jsonDecode(description);
+      if (parsed is List) {
+        final buffer = StringBuffer();
+        for (final op in parsed) {
+          if (op is! Map<String, dynamic>) continue;
+          final insert = op['insert'];
+          if (insert is String) {
+            buffer.write(insert);
+          } else if (insert is Map && insert.containsKey('image')) {
+            buffer.writeln('[image]');
+          }
+        }
+        return buffer.toString().trim();
+      }
+    } catch (_) {
+      // Fall back to the stored value below.
+    }
+
+    return description.trim();
   }
 }

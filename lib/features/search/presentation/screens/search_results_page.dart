@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:greate_note_app/core/widgets/glossy_app_bar.dart';
 import 'package:greate_note_app/features/app_background/app_background.dart';
-import 'package:greate_note_app/features/notes/presentation/screens/note_edit_page.dart';
 import 'package:greate_note_app/features/notes/data/data_sources/note_local_datasource.dart';
+import 'package:greate_note_app/features/notes/presentation/screens/note_page.dart';
 import '../bloc/search_bloc.dart';
 import '../bloc/search_state.dart';
 
@@ -148,7 +148,7 @@ class SearchResultsPage extends StatelessWidget {
             delegate: SliverChildBuilderDelegate(
               (context, index) {
                 final note = state.notes[index];
-                return _buildNoteItem(context, note, isDarkMode);
+                return _buildNoteItem(context, note, isDarkMode, state.query);
               },
               childCount: state.notes.length,
             ),
@@ -158,7 +158,12 @@ class SearchResultsPage extends StatelessWidget {
     );
   }
 
-  Widget _buildNoteItem(BuildContext context, Map<String, dynamic> note, bool isDarkMode) {
+  Widget _buildNoteItem(
+    BuildContext context,
+    Map<String, dynamic> note,
+    bool isDarkMode,
+    String query,
+  ) {
     final theme = Theme.of(context);
     final description = _parseDescription(note['description'] ?? '');
     final truncatedDescription = description.length > 100
@@ -214,11 +219,11 @@ class SearchResultsPage extends StatelessWidget {
             Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (context) => NoteEditPage(
+                builder: (context) => NotePage(
                   folderId: note['folder_id'],
-                  noteId: note['id'],
-                  initialTitle: note['title'] ?? '',
-                  initialDescription: note['description'] ?? '',
+                  folderName: note['folder_name']?.toString() ?? 'Folder',
+                  initialSearchQuery: query,
+                  initialExpandedNoteId: note['id'],
                 ),
               ),
             );
