@@ -54,4 +54,14 @@ class FolderLocalDataSource {
       whereArgs: [folderId],
     );
   }
+
+  // Update the folder color in the database
+  Future<void> updateFolderColor(int folderId, String color) async {
+    await db.update(
+      'folders',
+      {'color': color},
+      where: 'id = ?',
+      whereArgs: [folderId],
+    );
+  }
 }

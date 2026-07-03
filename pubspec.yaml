@@ -55,6 +55,8 @@ dependencies:
   pdf: ^3.11.1
   printing: ^5.13.4
   sqflite_common_ffi_web: ^1.1.2
+  archive: ^4.0.9
+  file_picker: ^11.0.2
 
 dev_dependencies:
   flutter_test:

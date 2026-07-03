@@ -46,6 +46,15 @@ class UpdateFolderName extends FolderEvent {
   @override
   List<Object> get props => [folderId, newName];
 }
+
+class UpdateFolderColor extends FolderEvent {
+  final int folderId;
+  final String newColor;
+
+  const UpdateFolderColor({required this.folderId, required this.newColor});
+  @override
+  List<Object> get props => [folderId, newColor];
+}
 // New Event for Search
 class SearchFolders extends FolderEvent {
   final String query;

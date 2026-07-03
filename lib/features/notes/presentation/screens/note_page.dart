@@ -1,11 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_quill/flutter_quill.dart' as quill;
 import 'package:flutter_quill_extensions/flutter_quill_extensions.dart';
+import 'package:greate_note_app/core/storage/note_image_storage.dart';
 import 'package:greate_note_app/core/widgets/glossy_app_bar.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -23,8 +24,14 @@ import 'package:pdf/widgets.dart' as pw;
 class NotePage extends StatefulWidget {
   final int folderId;
   final String folderName;
+  final String? folderColor;
 
-  const NotePage({super.key, required this.folderId, required this.folderName});
+  const NotePage({
+    super.key,
+    required this.folderId,
+    required this.folderName,
+    this.folderColor,
+  });
 
   @override
   State<NotePage> createState() => _NotePageState();
@@ -32,6 +39,7 @@ class NotePage extends StatefulWidget {
 
 class _NotePageState extends State<NotePage> {
   late String _folderName;
+  String? _folderColor;
   final Set<int> _expandedNotes = {};
   final TextEditingController _searchController = TextEditingController();
   List<Map<String, dynamic>> _filteredNotes = [];
@@ -42,6 +50,7 @@ class _NotePageState extends State<NotePage> {
   void initState() {
     super.initState();
     _folderName = widget.folderName;
+    _folderColor = widget.folderColor;
     // FIXED: Load notes once in initState instead of in build()
     context.read<NoteBloc>().add(LoadNotes(folderId: widget.folderId));
   }
@@ -210,24 +219,12 @@ class _NotePageState extends State<NotePage> {
     }
   }
 
-  ImageProvider? _imageProviderFromSource(BuildContext context, String imageSource) {
-    final source = imageSource.trim();
-    if (source.startsWith('data:') && source.contains(',')) {
-      final base64Part = source.split(',').last;
-      return MemoryImage(base64Decode(base64Part));
-    }
-    return null;
-  }
-
-  // Build note content with embedded images and formatting
+  // Build read-only note content, rendering embedded images (file refs or
+  // legacy base64) via the shared image provider so it matches the editor.
   Widget _buildNoteContent(String description, ThemeData theme) {
     try {
-      final decoded = jsonDecode(description);
-      if (decoded is! List) {
-        throw const FormatException('Note content is not a Quill delta');
-      }
-
-      final doc = quill.Document.fromJson(List<dynamic>.from(decoded));
+      final List<dynamic> content = jsonDecode(description) as List<dynamic>;
+      final doc = quill.Document.fromJson(content);
       final controller = quill.QuillController(
         document: doc,
         selection: const TextSelection.collapsed(offset: 0),
@@ -245,12 +242,12 @@ class _NotePageState extends State<NotePage> {
             embedBuilders: kIsWeb
                 ? FlutterQuillEmbeds.editorWebBuilders(
                     imageEmbedConfig: QuillEditorImageEmbedConfig(
-                      imageProviderBuilder: _imageProviderFromSource,
+                      imageProviderBuilder: NoteImageStorage.providerFor,
                     ),
                   )
                 : FlutterQuillEmbeds.editorBuilders(
                     imageEmbedConfig: QuillEditorImageEmbedConfig(
-                      imageProviderBuilder: _imageProviderFromSource,
+                      imageProviderBuilder: NoteImageStorage.providerFor,
                     ),
                   ),
           ),
@@ -304,8 +301,8 @@ class _NotePageState extends State<NotePage> {
           const AppBackground(),
           Container(
             color: isDarkMode
-                ? Colors.black.withOpacity(0.5)
-                : Colors.white.withOpacity(0.1),
+                ? Colors.black.withValues(alpha: 0.5)
+                : Colors.white.withValues(alpha: 0.1),
           ),
           BlocBuilder<NoteBloc, NoteState>(
             builder: (context, state) {
@@ -444,8 +441,7 @@ class _NotePageState extends State<NotePage> {
                                       icon: Icon(Icons.delete,
                                           color: theme.iconTheme.color),
                                       onPressed: () {
-                                        _showDeleteConfirmationDialog(
-                                            context, note['id']);
+                                        _deleteNoteWithUndo(context, note);
                                       },
                                     ),
                                     IconButton(
@@ -531,11 +527,11 @@ class _NotePageState extends State<NotePage> {
                     child: Container(
                       decoration: BoxDecoration(
                         color: Theme.of(context).brightness == Brightness.dark
-                            ? Colors.white.withOpacity(0.1)
-                            : Colors.white.withOpacity(0.4),
+                            ? Colors.white.withValues(alpha: 0.1)
+                            : Colors.white.withValues(alpha: 0.4),
                         borderRadius: BorderRadius.circular(10.0),
                         border: Border.all(
-                          color: Colors.white.withOpacity(0.7),
+                          color: Colors.white.withValues(alpha: 0.7),
                           width: 1.0,
                         ),
                       ),
@@ -636,82 +632,166 @@ class _NotePageState extends State<NotePage> {
     }
   }
 
-  // Method to show a dialog for editing the folder name
+  // Available folder color swatches (kept in sync with the Add Folder dialog)
+  static const List<Color> _folderColorOptions = [
+    Colors.red,
+    Colors.green,
+    Colors.blue,
+    Colors.yellow,
+    Colors.purple,
+    Colors.orange,
+    Colors.pink,
+    Colors.teal,
+    Colors.brown,
+    Colors.cyan,
+    Colors.indigo,
+  ];
+
+  // Method to show a dialog for editing the folder name and color
   void _showEditFolderDialog(BuildContext context) {
     final folderNameController = TextEditingController(text: _folderName);
+
+    // Parse the current color, falling back to blue if it's missing/invalid.
+    Color selectedColor = Colors.blue;
+    if (_folderColor != null) {
+      final parsed = int.tryParse(_folderColor!);
+      if (parsed != null) {
+        selectedColor = Color(parsed);
+      }
+    }
 
     showDialog(
       context: context,
       builder: (BuildContext context) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFDEFEEEA),
-          title: const Text('Edit Folder Name'),
-          content: TextFormField(
-            controller: folderNameController,
-            decoration: const InputDecoration(labelText: 'Folder Name'),
-          ),
-          actions: <Widget>[
-            TextButton(
-              child: const Text('Cancel'),
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-            ),
-            ElevatedButton(
-              child: const Text('Save'),
-              onPressed: () {
-                String newFolderName = folderNameController.text.trim();
-                if (newFolderName.isNotEmpty) {
-                  // Capitalize the first letter of the folder name
-                  newFolderName = newFolderName[0].toUpperCase() +
-                      newFolderName.substring(1);
-                  // Update the folder name in the Bloc
-                  context.read<FolderBloc>().add(UpdateFolderName(
-                        folderId: widget.folderId,
-                        newName: newFolderName,
-                      ));
-                  setState(() {
-                    _folderName =
-                        newFolderName; // Update the folder name locally
-                  });
-                  Navigator.of(context).pop(); // Close the dialog
-                }
-              },
-            ),
-          ],
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFDEFEEEA),
+              title: const Text('Edit Folder'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextFormField(
+                    controller: folderNameController,
+                    decoration: const InputDecoration(labelText: 'Folder Name'),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text('Folder Color:'),
+                  const SizedBox(height: 8),
+                  Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8.0),
+                      border: Border.all(width: 2, color: Colors.grey),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 4.0, horizontal: 4.0),
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: [
+                            for (final color in _folderColorOptions) ...[
+                              GestureDetector(
+                                onTap: () {
+                                  setDialogState(() {
+                                    selectedColor = color;
+                                  });
+                                },
+                                child: Container(
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: color,
+                                    border: selectedColor.value == color.value
+                                        ? Border.all(
+                                            color: Colors.black, width: 3)
+                                        : null,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              actions: <Widget>[
+                TextButton(
+                  child: const Text('Cancel'),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                  },
+                ),
+                ElevatedButton(
+                  child: const Text('Save'),
+                  onPressed: () {
+                    String newFolderName = folderNameController.text.trim();
+                    if (newFolderName.isEmpty) return;
+
+                    // Capitalize the first letter of the folder name
+                    newFolderName = newFolderName[0].toUpperCase() +
+                        newFolderName.substring(1);
+
+                    final newColor = selectedColor.value.toString();
+
+                    // Update the folder name in the Bloc
+                    context.read<FolderBloc>().add(UpdateFolderName(
+                          folderId: widget.folderId,
+                          newName: newFolderName,
+                        ));
+                    // Update the folder color in the Bloc
+                    context.read<FolderBloc>().add(UpdateFolderColor(
+                          folderId: widget.folderId,
+                          newColor: newColor,
+                        ));
+
+                    setState(() {
+                      _folderName = newFolderName; // Update locally
+                      _folderColor = newColor;
+                    });
+                    Navigator.of(context).pop(); // Close the dialog
+                  },
+                ),
+              ],
+            );
+          },
         );
       },
     );
   }
 
-  // Show delete confirmation dialog
-  void _showDeleteConfirmationDialog(BuildContext context, int noteId) {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Delete Note'),
-          content: const Text('Are you sure you want to delete this note?'),
-          actions: <Widget>[
-            TextButton(
-              child: const Text('Cancel'),
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-            ),
-            ElevatedButton(
-              child: const Text('Delete'),
-              onPressed: () {
-                context.read<NoteBloc>().add(DeleteNote(
-                      noteId: noteId,
-                      folderId: widget.folderId,
-                    ));
-                Navigator.of(context).pop(); // Close dialog
-              },
-            ),
-          ],
-        );
-      },
+  // Delete a note immediately and offer an Undo via a snackbar.
+  void _deleteNoteWithUndo(BuildContext context, Map<String, dynamic> note) {
+    final messenger = ScaffoldMessenger.of(context);
+    final noteBloc = context.read<NoteBloc>();
+
+    // Capture the note data so it can be restored.
+    final title = (note['title'] ?? '').toString();
+    final description = (note['description'] ?? '').toString();
+
+    noteBloc.add(DeleteNote(noteId: note['id'], folderId: widget.folderId));
+
+    messenger.clearSnackBars();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('Deleted "${title.isEmpty ? 'note' : title}"'),
+        duration: const Duration(seconds: 4),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () {
+            noteBloc.add(AddNote(
+              folderId: widget.folderId,
+              title: title,
+              description: description,
+            ));
+          },
+        ),
+      ),
     );
   }
 
@@ -797,4 +877,3 @@ class _NotePageState extends State<NotePage> {
     );
   }
 }
-

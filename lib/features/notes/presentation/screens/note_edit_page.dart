@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -6,6 +7,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_quill/flutter_quill.dart' as quill;
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:flutter_quill_extensions/flutter_quill_extensions.dart';
+import 'package:greate_note_app/core/storage/note_image_storage.dart';
 import 'package:greate_note_app/core/widgets/glossy_app_bar.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -39,6 +41,13 @@ class _NoteEditPageState extends State<NoteEditPage> {
   QuillController _quillController = QuillController.basic();
   bool _isImagesPreviewExpanded = true; // Track if images preview is expanded
 
+  // Autosave state.
+  NoteBloc? _noteBloc;
+  Timer? _autosaveTimer;
+  bool _isDirty = false;
+  late String _lastSavedJson;
+  late String _lastSavedTitle;
+
   @override
   void initState() {
     super.initState();
@@ -68,15 +77,63 @@ class _NoteEditPageState extends State<NoteEditPage> {
     } else {
       _quillController = quill.QuillController.basic();
     }
+
+    // Capture the bloc so autosave can run during dispose (context is gone by
+    // then). NoteBloc lives at the app level, so it stays alive across pages.
+    _noteBloc = context.read<NoteBloc>();
+    _lastSavedJson =
+        jsonEncode(_quillController.document.toDelta().toJson());
+    _lastSavedTitle = widget.initialTitle.trim();
+
+    // Autosave whenever the title or note body changes.
+    _titleController.addListener(_scheduleAutosave);
+    _quillController.addListener(_scheduleAutosave);
   }
 
   @override
   void dispose() {
+    // Flush any pending changes before tearing the page down.
+    _autosaveTimer?.cancel();
+    _titleController.removeListener(_scheduleAutosave);
+    _quillController.removeListener(_scheduleAutosave);
+    if (_isDirty) _performAutosave();
+
     _titleController.dispose();
     _quillController.dispose();
     _scrollController.dispose();
     _editorFocusNode.dispose();
     super.dispose();
+  }
+
+  // Debounce: save ~0.9s after the user stops typing.
+  void _scheduleAutosave() {
+    _isDirty = true;
+    _autosaveTimer?.cancel();
+    _autosaveTimer =
+        Timer(const Duration(milliseconds: 900), _performAutosave);
+  }
+
+  // Persist the current title + body without leaving the page.
+  void _performAutosave() {
+    final title = _titleController.text.trim();
+    // Don't autosave a note with no title (avoids wiping the title while typing).
+    if (title.isEmpty) return;
+
+    final json = jsonEncode(_quillController.document.toDelta().toJson());
+    // Skip redundant writes (e.g. cursor-only movements with no real change).
+    if (json == _lastSavedJson && title == _lastSavedTitle) return;
+
+    _noteBloc?.add(
+      UpdateNote(
+        noteId: widget.noteId,
+        folderId: widget.folderId,
+        title: title,
+        description: json,
+      ),
+    );
+    _lastSavedJson = json;
+    _lastSavedTitle = title;
+    _isDirty = false;
   }
 
   // Image picker methods
@@ -116,19 +173,20 @@ class _NoteEditPageState extends State<NoteEditPage> {
   }
 
   ImageProvider? _imageProviderFromSource(BuildContext context, String imageSource) {
-    final source = imageSource.trim();
-    if (source.startsWith('data:') && source.contains(',')) {
-      final base64Part = source.split(',').last;
-      return MemoryImage(base64Decode(base64Part));
-    }
-    return null;
+    return NoteImageStorage.providerFor(context, imageSource);
   }
 
   Future<void> _insertImageToNote(XFile image) async {
     try {
       final bytes = await image.readAsBytes();
       final mimeType = image.mimeType ?? _guessMimeType(image.name);
-      final dataUri = 'data:$mimeType;base64,${base64Encode(bytes)}';
+      // Store the image as a file and embed a lightweight reference instead of
+      // a large base64 blob (keeps the note/DB small and backup-friendly).
+      final imageRef = await NoteImageStorage.saveImage(
+        bytes,
+        mimeType: mimeType,
+        nameHint: image.name,
+      );
 
       final selection = _quillController.selection;
       final index = selection.baseOffset < 0
@@ -139,7 +197,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
       _quillController.replaceText(
         index,
         length < 0 ? 0 : length,
-        quill.BlockEmbed.image(dataUri),
+        quill.BlockEmbed.image(imageRef),
         null,
       );
 
@@ -611,11 +669,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
               ),
             ),
             // Rich Text Toolbar with improved design
-            AnimatedPadding(
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOut,
-              padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-              child: Container(
+            Container(
                 decoration: BoxDecoration(
                   color: isDarkMode ? Colors.grey.shade900 : Colors.grey.shade100,
                   border: Border(
@@ -635,11 +689,10 @@ class _NoteEditPageState extends State<NoteEditPage> {
                   ],
                 ),
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 12.0),
-                  child: Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    alignment: WrapAlignment.start,
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 6.0),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       quill.QuillToolbarHistoryButton(
                         isUndo: true,
@@ -792,7 +845,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                   ),
                 ),
               ),
-            ),
           ],
         ),
       ),
@@ -817,6 +869,10 @@ class _NoteEditPageState extends State<NoteEditPage> {
                   updatedDescription, // Save Quill JSON format as a string
             ),
           );
+      // Mark clean so dispose() doesn't fire a duplicate autosave.
+      _lastSavedJson = updatedDescription;
+      _lastSavedTitle = updatedTitle;
+      _isDirty = false;
       Navigator.of(context).pop(); // Go back after saving
     }
   }

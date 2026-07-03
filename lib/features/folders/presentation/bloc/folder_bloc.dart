@@ -73,6 +73,15 @@ class FolderBloc extends Bloc<FolderEvent, FolderState> {
         emit(const FolderError('Failed to update folder name'));
       }
     });
+    on<UpdateFolderColor>((event, emit) async {
+      try {
+        await localDataSource.updateFolderColor(event.folderId, event.newColor);
+        // Reload folders after updating the folder color
+        add(LoadFolders());
+      } catch (e) {
+        emit(const FolderError('Failed to update folder color'));
+      }
+    });
     // Event to search folders
     on<SearchFolders>((event, emit) {
       if (event.query.isEmpty) {

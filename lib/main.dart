@@ -13,6 +13,7 @@ import 'package:greate_note_app/features/splash_feature/presentation/screens/spl
 import 'package:sqflite/sqflite.dart';
 
 import 'core/database/app_database.dart';
+import 'core/storage/app_paths.dart';
 import 'features/folders/presentation/bloc/folder_bloc.dart';
 import 'features/folders/presentation/bloc/folder_event.dart';
 import 'features/notes/data/data_sources/note_local_datasource.dart';
@@ -28,6 +29,9 @@ void main() async {
   } else {
     await MobileAds.instance.initialize();
   }
+
+  // Cache storage paths (documents dir + note images folder) for sync access.
+  await AppPaths.init();
 
   try {
     // Initialize the database

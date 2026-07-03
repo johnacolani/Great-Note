@@ -159,46 +159,46 @@ class SearchResultsPage extends StatelessWidget {
   }
 
   Widget _buildNoteItem(BuildContext context, Map<String, dynamic> note, bool isDarkMode) {
+    final theme = Theme.of(context);
     final description = _parseDescription(note['description'] ?? '');
-    final truncatedDescription = description.length > 100 
-        ? '${description.substring(0, 100)}...' 
+    final truncatedDescription = description.length > 100
+        ? '${description.substring(0, 100)}...'
         : description;
 
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+    // Matches the note cards in NotePage: theme cardColor + elevation.
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
       child: Card(
-        color: isDarkMode ? Colors.grey[850] : Colors.white,
-        elevation: 2,
+        color: theme.cardColor,
+        elevation: 10,
         child: ListTile(
-          leading: CircleAvatar(
-            backgroundColor: Colors.blue,
-            child: const Icon(Icons.note, color: Colors.white),
-          ),
           title: Text(
             note['title'] ?? 'Untitled',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: isDarkMode ? Colors.white : Colors.black,
-            ),
+            style: theme.textTheme.bodyLarge,
           ),
           subtitle: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'In folder: ${note['folder_name']}',
-                style: TextStyle(
-                  color: isDarkMode ? Colors.blue[300] : Colors.blue[600],
-                  fontSize: 12,
-                ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Icon(Icons.folder, size: 14, color: theme.hintColor),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      note['folder_name']?.toString() ?? '',
+                      style: theme.textTheme.bodySmall,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
               ),
               if (truncatedDescription.isNotEmpty) ...[
                 const SizedBox(height: 4),
                 Text(
                   truncatedDescription,
-                  style: TextStyle(
-                    color: isDarkMode ? Colors.grey[300] : Colors.grey[600],
-                    fontSize: 13,
-                  ),
+                  style: theme.textTheme.bodyMedium,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -207,7 +207,7 @@ class SearchResultsPage extends StatelessWidget {
           ),
           trailing: Icon(
             Icons.arrow_forward_ios,
-            color: isDarkMode ? Colors.grey[400] : Colors.grey[600],
+            color: theme.iconTheme.color,
             size: 16,
           ),
           onTap: () {

@@ -1,16 +1,18 @@
+import 'dart:io';
 import 'dart:ui';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:greate_note_app/core/backup/backup_service.dart';
 import 'package:greate_note_app/core/theme/theme_bloc.dart';
 import 'package:greate_note_app/core/widgets/custom_floating_action_button.dart';
 import 'package:greate_note_app/core/widgets/glossy_app_bar.dart';
 import 'package:greate_note_app/features/app_background/bloc/background_bloc.dart';
 import 'package:intl/intl.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../../app_background/app_background.dart';
 import '../../../notes/data/data_sources/note_local_datasource.dart';
-import '../../../search/presentation/bloc/search_bloc.dart';
-import '../../../search/presentation/bloc/search_event.dart';
-import '../../../search/presentation/screens/search_results_page.dart';
 import '../../../notes/presentation/screens/note_page.dart';
 import '../bloc/folder_bloc.dart';
 import '../bloc/folder_event.dart';
@@ -108,6 +110,35 @@ class _FolderPageState extends State<FolderPage> {
                 _showBackgroundSelectionDialog(context);
               },
               icon: const Icon(Icons.image)),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            tooltip: 'Backup & Restore',
+            onSelected: (value) {
+              if (value == 'export') {
+                _exportBackup(context);
+              } else if (value == 'import') {
+                _importBackup(context);
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem<String>(
+                value: 'export',
+                child: ListTile(
+                  leading: Icon(Icons.backup_outlined),
+                  title: Text('Backup (export ZIP)'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'import',
+                child: ListTile(
+                  leading: Icon(Icons.restore),
+                  title: Text('Restore (import ZIP)'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
+          ),
         ],
         backgroundColor: Colors.transparent, // Make AppBar transparent
         elevation: 0, // Remove shadow
@@ -117,8 +148,8 @@ class _FolderPageState extends State<FolderPage> {
           const AppBackground(),
           Container(
             color: isDarkMode
-                ? Colors.black.withOpacity(0.5)
-                : Colors.white.withOpacity(0.1),
+                ? Colors.black.withValues(alpha: 0.5)
+                : Colors.white.withValues(alpha: 0.1),
           ),
           Padding(
             padding: EdgeInsets.only(
@@ -220,7 +251,8 @@ class _FolderPageState extends State<FolderPage> {
                             MaterialPageRoute(
                               builder: (context) => NotePage(
                                   folderId: folder['id'],
-                                  folderName: folder['name']),
+                                  folderName: folder['name'],
+                                  folderColor: folder['color']?.toString()),
                             ),
                           );
                         },
@@ -240,8 +272,9 @@ class _FolderPageState extends State<FolderPage> {
                                     decoration: BoxDecoration(
                                       border: Border.all(
                                           color: Colors.white, width: 2),
-                                      color: Colors.white.withOpacity(
-                                          0.2), // Semi-transparent color overlay
+                                      color: Colors.white.withValues(
+                                          alpha:
+                                              0.2), // Semi-transparent color overlay
                                       borderRadius: BorderRadius.circular(16),
                                     ),
                                   ),
@@ -277,12 +310,14 @@ class _FolderPageState extends State<FolderPage> {
                 child: Container(
                   decoration: BoxDecoration(
                     color: Theme.of(context).brightness == Brightness.dark
-                        ? Colors.white.withOpacity(0.1) // Dark mode color
-                        : Colors.white.withOpacity(0.4), // Light mode color
+                        ? Colors.white.withValues(alpha: 0.1) // Dark mode color
+                        : Colors.white
+                            .withValues(alpha: 0.4), // Light mode color
                     borderRadius:
                         BorderRadius.circular(10.0), // Rounded corners
                     border: Border.all(
-                      color: Colors.white.withOpacity(0.7), // Subtle border
+                      color:
+                          Colors.white.withValues(alpha: 0.7), // Subtle border
                       width: 1.0,
                     ),
                   ),
@@ -295,7 +330,7 @@ class _FolderPageState extends State<FolderPage> {
                     ),
                     cursorColor: Colors.grey.shade400,
                     decoration: InputDecoration(
-                      hintText: 'Search notes across all folders...',
+                      hintText: 'Search folders...',
                       hintStyle: TextStyle(
                         color: Theme.of(context).brightness == Brightness.dark
                             ? Colors.grey.shade300
@@ -314,19 +349,14 @@ class _FolderPageState extends State<FolderPage> {
                         borderSide: BorderSide.none, // No visible border
                       ),
                     ),
-                    onChanged: (query) {},
+                    onChanged: (query) {
+                      context
+                          .read<FolderBloc>()
+                          .add(SearchFolders(query: query));
+                    },
                     onSubmitted: (query) {
-                      final trimmed = query.trim();
-                      if (trimmed.isEmpty) return;
-                      context.read<SearchBloc>().add(SearchNotesOnly(query: trimmed));
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (context) => SearchResultsPage(
-                            query: trimmed,
-                            noteLocalDataSource: widget.noteLocalDataSource,
-                          ),
-                        ),
-                      );
+                      _searchController.clear();
+                      context.read<FolderBloc>().add(LoadFolders());
                     },
                   ),
                 ),
@@ -381,7 +411,7 @@ class _FolderPageState extends State<FolderPage> {
       children: [
         Card(
           color: Color(int.parse(folder['color']))
-              .withOpacity(0.5), // Semi-transparent folder color
+              .withValues(alpha: 0.5), // Semi-transparent folder color
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
@@ -411,8 +441,7 @@ class _FolderPageState extends State<FolderPage> {
                         IconButton(
                           icon: const Icon(Icons.delete, color: Colors.white),
                           onPressed: () async {
-                            await _confirmAndDeleteFolder(
-                                context, folder['id'], folder['name']);
+                            await _confirmAndDeleteFolder(context, folder);
                           },
                         ),
                       ],
@@ -432,8 +461,9 @@ class _FolderPageState extends State<FolderPage> {
                   child: Container(
                     width: double.infinity,
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(
-                          0.2), // More transparency for the note container
+                      color: Colors.white.withValues(
+                          alpha:
+                              0.2), // More transparency for the note container
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: Column(
@@ -469,21 +499,19 @@ class _FolderPageState extends State<FolderPage> {
                                       style: TextStyle(color: Colors.white),
                                     ),
                                   );
-                                  } else {
+                                } else {
                                   final notes = snapshot.data!;
                                   return ListView.builder(
-                                    primary: false,
-                                    physics: const ClampingScrollPhysics(),
+                                    shrinkWrap: true,
                                     itemCount: notes.length,
-                                    padding: EdgeInsets.zero,
                                     itemBuilder: (context, index) {
                                       final note = notes[index];
                                       return Padding(
                                         padding: const EdgeInsets.all(2.0),
                                         child: Container(
                                           decoration: BoxDecoration(
-                                              color:
-                                                  Colors.white.withOpacity(0.7),
+                                              color: Colors.white
+                                                  .withValues(alpha: 0.7),
                                               borderRadius:
                                                   BorderRadius.circular(4.0)),
                                           child: Padding(
@@ -527,19 +555,127 @@ class _FolderPageState extends State<FolderPage> {
     }
   }
 
+  // Export all folders, notes, images and background as a ZIP and share it.
+  Future<void> _exportBackup(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Preparing backup…')),
+    );
+    try {
+      final service = BackupService(widget.noteLocalDataSource.db);
+      final result = await service.exportBackup();
+
+      final tempDir = await getTemporaryDirectory();
+      final file = File('${tempDir.path}/${result.fileName}');
+      await file.writeAsBytes(result.bytes, flush: true);
+
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(file.path)],
+          subject: 'Great Note backup',
+          text: 'Great Note backup',
+        ),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Backup failed: $e')),
+      );
+    }
+  }
+
+  // Pick a backup ZIP and (after confirmation) replace all local data with it.
+  Future<void> _importBackup(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+
+    final picked = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['zip'],
+      withData: true,
+    );
+    if (picked == null || picked.files.isEmpty) return;
+
+    final bytes = picked.files.first.bytes;
+    if (bytes == null) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not read the selected file.')),
+      );
+      return;
+    }
+
+    if (!context.mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Restore backup?'),
+        content: const Text(
+          'This will REPLACE all current folders, notes, images and the '
+          'background with the contents of the backup. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Replace everything'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    // Blocking loader while restoring.
+    if (!context.mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final service = BackupService(widget.noteLocalDataSource.db);
+      await service.importBackupReplace(bytes);
+
+      if (!context.mounted) return;
+      Navigator.of(context).pop(); // dismiss loader
+
+      // Reload folders and background from the restored data.
+      context.read<FolderBloc>().add(LoadFolders());
+      context.read<BackgroundBloc>().add(LoadBackgroundEvent());
+
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Backup restored successfully.')),
+      );
+    } catch (e) {
+      if (context.mounted) Navigator.of(context).pop(); // dismiss loader
+      messenger.showSnackBar(
+        SnackBar(content: Text('Restore failed: $e')),
+      );
+    }
+  }
+
   // Method to confirm and delete the folder if empty
   Future<void> _confirmAndDeleteFolder(
-      BuildContext context, int folderId, String folderName) async {
+      BuildContext context, Map<String, dynamic> folder) async {
+    final folderId = folder['id'] as int;
+    final folderName = (folder['name'] ?? '').toString();
+
     // First check if the folder contains any notes
     final hasNotes =
         await widget.noteLocalDataSource.hasNotesInFolder(folderId);
 
+    if (!context.mounted) return;
     if (hasNotes) {
       // If the folder contains notes, show a message and prevent deletion
       _showAlertDialog(context, 'Cannot Delete',
           'This folder contains notes and cannot be deleted.');
       return;
     }
+
+    final messenger = ScaffoldMessenger.of(context);
+    final folderBloc = context.read<FolderBloc>();
 
     // Show confirmation dialog
     final confirmed = await showDialog<bool>(
@@ -569,7 +705,28 @@ class _FolderPageState extends State<FolderPage> {
 
     if (confirmed == true) {
       // Proceed to delete the folder if confirmed
-      context.read<FolderBloc>().add(DeleteFolder(id: folderId));
+      folderBloc.add(DeleteFolder(id: folderId));
+
+      // Offer an Undo (re-creates the empty folder with its colour + date).
+      final color = (folder['color'] ?? '').toString();
+      final createdAt = folder['createdAt'];
+      messenger.clearSnackBars();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Deleted folder "$folderName"'),
+          duration: const Duration(seconds: 4),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () {
+              folderBloc.add(AddFolder(
+                name: folderName,
+                color: color,
+                createdAt: createdAt is DateTime ? createdAt : null,
+              ));
+            },
+          ),
+        ),
+      );
     }
   }
 
@@ -608,7 +765,7 @@ void _showAddFolderDialog(BuildContext context) {
         child: StatefulBuilder(
           builder: (context, setState) {
             return AlertDialog(
-              backgroundColor: Colors.white30.withOpacity(0.8),
+              backgroundColor: Colors.white30.withValues(alpha: 0.8),
               title: const Text('Add Folder'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -755,7 +912,8 @@ void _showAddFolderDialog(BuildContext context) {
                       context.read<FolderBloc>().add(
                             AddFolder(
                               name: folderName,
-                              color: selectedColor.value
+                              color: selectedColor
+                                  .toARGB32()
                                   .toString(), // Store color as int value string
                             ),
                           );
