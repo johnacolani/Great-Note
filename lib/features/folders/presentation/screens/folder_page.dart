@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:greate_note_app/core/backup/backup_service.dart';
@@ -8,7 +9,10 @@ import 'package:greate_note_app/core/widgets/custom_floating_action_button.dart'
 import 'package:greate_note_app/core/widgets/glossy_app_bar.dart';
 import 'package:greate_note_app/features/app_background/bloc/background_bloc.dart';
 import 'package:intl/intl.dart';
+<<<<<<< Updated upstream
 import 'package:share_plus/share_plus.dart';
+=======
+>>>>>>> Stashed changes
 import '../../../app_background/app_background.dart';
 import '../../../notes/data/data_sources/note_local_datasource.dart';
 import '../../../search/presentation/bloc/search_bloc.dart';
@@ -730,6 +734,7 @@ class _FolderPageState extends State<FolderPage> {
       final service = BackupService(widget.noteLocalDataSource.db);
       final result = await service.exportBackup();
 
+<<<<<<< Updated upstream
       await SharePlus.instance.share(
         ShareParams(
           files: [
@@ -742,6 +747,33 @@ class _FolderPageState extends State<FolderPage> {
           fileNameOverrides: [result.fileName],
           subject: 'Great Note backup',
         ),
+=======
+      // Open a "Save to device" dialog. On iOS/Android this is the document
+      // picker (choose "On My iPhone"/local storage); on desktop it's the
+      // native save dialog. No cloud/share sheet involved.
+      final outputPath = await FilePicker.saveFile(
+        dialogTitle: 'Save Great Note backup',
+        fileName: result.fileName,
+        type: FileType.custom,
+        allowedExtensions: ['zip'],
+        bytes: result.bytes,
+      );
+
+      if (outputPath == null) {
+        // User cancelled the save dialog.
+        return;
+      }
+
+      // On desktop, saveFile returns the chosen path without writing the
+      // bytes, so write them ourselves. On mobile, file_picker already wrote.
+      if (!kIsWeb &&
+          (Platform.isMacOS || Platform.isWindows || Platform.isLinux)) {
+        await File(outputPath).writeAsBytes(result.bytes, flush: true);
+      }
+
+      messenger.showSnackBar(
+        SnackBar(content: Text('Backup saved to your device: ${result.fileName}')),
+>>>>>>> Stashed changes
       );
     } catch (e) {
       messenger.showSnackBar(
@@ -1002,7 +1034,9 @@ void _showAddFolderDialog(BuildContext context) {
         child: StatefulBuilder(
           builder: (context, setState) {
             return AlertDialog(
-              backgroundColor: Colors.white30.withValues(alpha: 0.8),
+              backgroundColor: Theme.of(context).brightness == Brightness.dark
+                  ? Colors.grey.shade900
+                  : Colors.white,
               title: const Text('Add Folder'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,

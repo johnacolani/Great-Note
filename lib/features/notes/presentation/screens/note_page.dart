@@ -929,7 +929,9 @@ class _NotePageState extends State<NotePage> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              backgroundColor: const Color(0xFDEFEEEA),
+              backgroundColor: Theme.of(context).brightness == Brightness.dark
+              ? Colors.grey.shade900
+              : Colors.white,
               title: const Text('Edit Folder'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -1095,7 +1097,9 @@ class _NotePageState extends State<NotePage> {
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
-          backgroundColor: const Color(0xFDEFEEEA),
+          backgroundColor: Theme.of(context).brightness == Brightness.dark
+              ? Colors.grey.shade900
+              : Colors.white,
           title: const Text(
             'Add Note',
             style: TextStyle(color: Colors.blueGrey),
