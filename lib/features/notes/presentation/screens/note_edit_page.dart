@@ -266,14 +266,16 @@ class _NoteEditPageState extends State<NoteEditPage> {
 
   // Build custom editor that shows both text and images
   Widget _buildCustomEditor() {
+    final keyboardInset = MediaQuery.of(context).viewInsets.bottom;
+
     return quill.QuillEditor.basic(
       controller: _quillController,
       scrollController: _scrollController,
       focusNode: _editorFocusNode,
       config: quill.QuillEditorConfig(
         expands: true,
-        padding: EdgeInsets.zero,
-        scrollBottomInset: MediaQuery.of(context).viewInsets.bottom + 24,
+        padding: EdgeInsets.fromLTRB(12, 16, 12, keyboardInset + 96),
+        scrollBottomInset: keyboardInset + 96,
         embedBuilders: kIsWeb
             ? FlutterQuillEmbeds.editorWebBuilders(
                 imageEmbedConfig: QuillEditorImageEmbedConfig(
@@ -612,9 +614,15 @@ class _NoteEditPageState extends State<NoteEditPage> {
             : Colors.blue.withValues(alpha: 0.3),
         elevation: 0,
       ),
-      resizeToAvoidBottomInset: true,
-      body: SafeArea(
-        child: Column(
+      resizeToAvoidBottomInset: false,
+      body: AnimatedPadding(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+        ),
+        child: SafeArea(
+          child: Column(
           children: [
             // Title input with improved styling
             Container(
@@ -847,7 +855,8 @@ class _NoteEditPageState extends State<NoteEditPage> {
               ),
           ],
         ),
-      ),
+          ),
+        ),
     );
   }
 
