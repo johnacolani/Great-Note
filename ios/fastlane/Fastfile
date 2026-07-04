@@ -1,31 +1,41 @@
-# This file contains the fastlane.tools configuration
-# You can find the documentation at https://docs.fastlane.tools
-#
-# For a list of all available actions, check out
-#
-#     https://docs.fastlane.tools/actions
-#
-# For a list of all available plugins, check out
-#
-#     https://docs.fastlane.tools/plugins/available-plugins
-#
-
-# Uncomment the line if you want fastlane to automatically update itself
-# update_fastlane
-
 default_platform(:ios)
 
 platform :ios do
-  desc "Push a new release build to the App Store"
-  lane :release_app_store do
-    increment_build_number(xcodeproj: "Runner.xcodeproj")
-    build_app(workspace: "Runner.xcworkspace", scheme: "Runner")
-    upload_to_app_store(
-      api_key: {
-          key_id: "88M9PZQQVA",
-          issuer_id: "19dde628-21bd-41bd-8fb9-4eda79f4018c",
-          key_file: "./fastlane/88M9PZQQVA.p8"
-        }
+  desc "Build a signed IPA (via match) and upload it to TestFlight"
+  lane :beta do
+    # On CI, create a temporary keychain so match can install certs safely.
+    setup_ci if is_ci
+
+    # App Store Connect API key (used for both signing metadata and upload).
+    api_key = app_store_connect_api_key(
+      key_id: ENV["ASC_KEY_ID"],
+      issuer_id: ENV["ASC_ISSUER_ID"],
+      key_filepath: ENV["ASC_KEY_PATH"],
+      in_house: false
+    )
+
+    # Pull the distribution certificate + App Store profile from the match repo.
+    match(
+      type: "appstore",
+      readonly: is_ci,
+      app_identifier: "com.johncolani.infiniteNotesPlus",
+      api_key: api_key
+    )
+
+    # Archive & export a signed IPA. Flutter has already compiled the app
+    # (flutter build ios --no-codesign in CI), so this re-archives with signing.
+    build_app(
+      workspace: "Runner.xcworkspace",
+      scheme: "Runner",
+      export_method: "app-store",
+      output_directory: "../build/ios/ipa",
+      output_name: "Runner.ipa",
+      clean: false
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      skip_waiting_for_build_processing: true
     )
   end
 end
