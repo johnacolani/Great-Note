@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:ui';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -9,10 +10,6 @@ import 'package:greate_note_app/core/widgets/custom_floating_action_button.dart'
 import 'package:greate_note_app/core/widgets/glossy_app_bar.dart';
 import 'package:greate_note_app/features/app_background/bloc/background_bloc.dart';
 import 'package:intl/intl.dart';
-<<<<<<< Updated upstream
-import 'package:share_plus/share_plus.dart';
-=======
->>>>>>> Stashed changes
 import '../../../app_background/app_background.dart';
 import '../../../notes/data/data_sources/note_local_datasource.dart';
 import '../../../search/presentation/bloc/search_bloc.dart';
@@ -734,20 +731,6 @@ class _FolderPageState extends State<FolderPage> {
       final service = BackupService(widget.noteLocalDataSource.db);
       final result = await service.exportBackup();
 
-<<<<<<< Updated upstream
-      await SharePlus.instance.share(
-        ShareParams(
-          files: [
-            XFile.fromData(
-              result.bytes,
-              name: result.fileName,
-              mimeType: 'application/zip',
-            ),
-          ],
-          fileNameOverrides: [result.fileName],
-          subject: 'Great Note backup',
-        ),
-=======
       // Open a "Save to device" dialog. On iOS/Android this is the document
       // picker (choose "On My iPhone"/local storage); on desktop it's the
       // native save dialog. No cloud/share sheet involved.
@@ -773,7 +756,6 @@ class _FolderPageState extends State<FolderPage> {
 
       messenger.showSnackBar(
         SnackBar(content: Text('Backup saved to your device: ${result.fileName}')),
->>>>>>> Stashed changes
       );
     } catch (e) {
       messenger.showSnackBar(

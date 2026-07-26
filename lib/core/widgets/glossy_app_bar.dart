@@ -24,7 +24,7 @@ class GlossyAppBar extends StatelessWidget implements PreferredSizeWidget {
           child: Container(
             height: 200,
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.3), // Glossy effect with opacity
+              color: Colors.black.withValues(alpha: 0.3), // Glossy effect with opacity
               borderRadius: const BorderRadius.vertical(
                 bottom: Radius.circular(0), // Same rounded corners
               ),
@@ -42,8 +42,8 @@ class GlossyAppBar extends StatelessWidget implements PreferredSizeWidget {
             title,
             style: Theme.of(context).textTheme.titleLarge?.copyWith(
               color: Theme.of(context).brightness == Brightness.dark
-                  ? Colors.white.withOpacity(0.5)
-                  : Colors.black.withOpacity(0.6), // Adjust text color based on theme
+                  ? Colors.white.withValues(alpha: 0.5)
+                  : Colors.black.withValues(alpha: 0.6), // Adjust text color based on theme
             ),
           ),
           actions: actions,

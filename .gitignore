@@ -44,3 +44,14 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# --- Secrets / signing (never commit) ---
+**/key.properties
+**/*.jks
+**/*.keystore
+**/*.p12
+**/*.p8
+**/google_service_account*.json
+**/service_account*.json
+**/fastlane/.env
+.env

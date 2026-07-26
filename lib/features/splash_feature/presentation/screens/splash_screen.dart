@@ -118,7 +118,7 @@ class _SplashScreenState extends State<SplashScreen>
                           shaderCallback: (bounds) => LinearGradient(
                             colors: [
                               Colors.white,
-                              Colors.white.withOpacity(0.8),
+                              Colors.white.withValues(alpha: 0.8),
                             ],
                           ).createShader(bounds),
                           child: const Text(
@@ -146,7 +146,7 @@ class _SplashScreenState extends State<SplashScreen>
                             'Capture Your Thoughts',
                             style: TextStyle(
                               fontSize: 16,
-                              color: Colors.white.withOpacity(0.8),
+                              color: Colors.white.withValues(alpha: 0.8),
                               letterSpacing: 1,
                             ),
                           ),

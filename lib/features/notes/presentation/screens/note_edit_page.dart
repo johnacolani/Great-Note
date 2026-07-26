@@ -1,13 +1,9 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_quill/flutter_quill.dart' as quill;
 import 'package:flutter_quill/flutter_quill.dart';
-import 'package:flutter_quill_extensions/flutter_quill_extensions.dart';
-import 'package:greate_note_app/core/storage/note_image_storage.dart';
 import 'package:greate_note_app/core/widgets/glossy_app_bar.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
@@ -41,13 +37,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
   QuillController _quillController = QuillController.basic();
   bool _isImagesPreviewExpanded = true; // Track if images preview is expanded
 
-  // Autosave state.
-  NoteBloc? _noteBloc;
-  Timer? _autosaveTimer;
-  bool _isDirty = false;
-  late String _lastSavedJson;
-  late String _lastSavedTitle;
-
   @override
   void initState() {
     super.initState();
@@ -77,63 +66,15 @@ class _NoteEditPageState extends State<NoteEditPage> {
     } else {
       _quillController = quill.QuillController.basic();
     }
-
-    // Capture the bloc so autosave can run during dispose (context is gone by
-    // then). NoteBloc lives at the app level, so it stays alive across pages.
-    _noteBloc = context.read<NoteBloc>();
-    _lastSavedJson =
-        jsonEncode(_quillController.document.toDelta().toJson());
-    _lastSavedTitle = widget.initialTitle.trim();
-
-    // Autosave whenever the title or note body changes.
-    _titleController.addListener(_scheduleAutosave);
-    _quillController.addListener(_scheduleAutosave);
   }
 
   @override
   void dispose() {
-    // Flush any pending changes before tearing the page down.
-    _autosaveTimer?.cancel();
-    _titleController.removeListener(_scheduleAutosave);
-    _quillController.removeListener(_scheduleAutosave);
-    if (_isDirty) _performAutosave();
-
     _titleController.dispose();
     _quillController.dispose();
     _scrollController.dispose();
     _editorFocusNode.dispose();
     super.dispose();
-  }
-
-  // Debounce: save ~0.9s after the user stops typing.
-  void _scheduleAutosave() {
-    _isDirty = true;
-    _autosaveTimer?.cancel();
-    _autosaveTimer =
-        Timer(const Duration(milliseconds: 900), _performAutosave);
-  }
-
-  // Persist the current title + body without leaving the page.
-  void _performAutosave() {
-    final title = _titleController.text.trim();
-    // Don't autosave a note with no title (avoids wiping the title while typing).
-    if (title.isEmpty) return;
-
-    final json = jsonEncode(_quillController.document.toDelta().toJson());
-    // Skip redundant writes (e.g. cursor-only movements with no real change).
-    if (json == _lastSavedJson && title == _lastSavedTitle) return;
-
-    _noteBloc?.add(
-      UpdateNote(
-        noteId: widget.noteId,
-        folderId: widget.folderId,
-        title: title,
-        description: json,
-      ),
-    );
-    _lastSavedJson = json;
-    _lastSavedTitle = title;
-    _isDirty = false;
   }
 
   // Image picker methods
@@ -142,7 +83,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
       final ImagePicker picker = ImagePicker();
       final XFile? image = await picker.pickImage(source: ImageSource.gallery);
       if (image != null) {
-        await _insertImageToNote(image);
+        await _insertImageToNote(image.path);
       }
     } catch (e) {
       debugPrint("Error picking image from gallery: $e");
@@ -155,7 +96,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
       final ImagePicker picker = ImagePicker();
       final XFile? image = await picker.pickImage(source: ImageSource.camera);
       if (image != null) {
-        await _insertImageToNote(image);
+        await _insertImageToNote(image.path);
       }
     } catch (e) {
       debugPrint("Error picking image from camera: $e");
@@ -163,50 +104,34 @@ class _NoteEditPageState extends State<NoteEditPage> {
     }
   }
 
-  String _guessMimeType(String fileName) {
-    final lower = fileName.toLowerCase();
-    if (lower.endsWith('.png')) return 'image/png';
-    if (lower.endsWith('.webp')) return 'image/webp';
-    if (lower.endsWith('.gif')) return 'image/gif';
-    if (lower.endsWith('.bmp')) return 'image/bmp';
-    return 'image/jpeg';
-  }
-
-  ImageProvider? _imageProviderFromSource(BuildContext context, String imageSource) {
-    return NoteImageStorage.providerFor(context, imageSource);
-  }
-
-  Future<void> _insertImageToNote(XFile image) async {
+  Future<void> _insertImageToNote(String imagePath) async {
     try {
-      final bytes = await image.readAsBytes();
-      final mimeType = image.mimeType ?? _guessMimeType(image.name);
-      // Store the image as a file and embed a lightweight reference instead of
-      // a large base64 blob (keeps the note/DB small and backup-friendly).
-      final imageRef = await NoteImageStorage.saveImage(
-        bytes,
-        mimeType: mimeType,
-        nameHint: image.name,
-      );
+      // Copy image to app directory for persistence
+      final Directory appDir = await getApplicationDocumentsDirectory();
+      final String fileName = '${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final String newPath = '${appDir.path}/$fileName';
 
-      final selection = _quillController.selection;
-      final index = selection.baseOffset < 0
-          ? _quillController.document.length
-          : selection.baseOffset;
-      final length = selection.extentOffset - selection.baseOffset;
+      await File(imagePath).copy(newPath);
 
-      _quillController.replaceText(
-        index,
-        length < 0 ? 0 : length,
-        quill.BlockEmbed.image(imageRef),
-        null,
-      );
+      // Get current cursor position, default to end of document if invalid
+      int index = _quillController.selection.baseOffset;
+      if (index < 0 || index > _quillController.document.length) {
+        index = _quillController.document.length - 1;
+      }
 
+      // Insert image reference as text at cursor position
+      final imageText = '\n📷 $fileName\n';
+      _quillController.document.insert(index, imageText);
+
+      // Move cursor after the image reference
+      final newOffset = index + imageText.length;
       _quillController.updateSelection(
-        TextSelection.collapsed(offset: index + 1),
+        TextSelection.collapsed(offset: newOffset),
         ChangeSource.local,
       );
 
-      _showSnackBar('Image inserted');
+      _showSnackBar("Image inserted at cursor position ✓");
+      debugPrint("Image saved to: $newPath at index: $index");
     } catch (e) {
       debugPrint("Error inserting image: $e");
       _showSnackBar("Failed to add image: ${e.toString()}");
@@ -232,7 +157,7 @@ class _NoteEditPageState extends State<NoteEditPage> {
   // Show image gallery with all images in the note
   void _showImageGallery() async {
     final text = _quillController.document.toPlainText();
-    final imagePattern = RegExp(r'ðŸ“· ([^\n]+)');
+    final imagePattern = RegExp(r'📷 ([^\n]+)');
     final matches = imagePattern.allMatches(text);
 
     if (matches.isEmpty) {
@@ -265,36 +190,55 @@ class _NoteEditPageState extends State<NoteEditPage> {
   }
 
   // Build custom editor that shows both text and images
-  Widget _buildCustomEditor() {
-    final keyboardInset = MediaQuery.of(context).viewInsets.bottom;
-
-    return quill.QuillEditor.basic(
-      controller: _quillController,
-      scrollController: _scrollController,
-      focusNode: _editorFocusNode,
-      config: quill.QuillEditorConfig(
+  // Shared editor config. A small, fixed scrollBottomInset keeps the caret
+  // comfortably in view. It must NOT include the keyboard height — the Scaffold
+  // already resizes for the keyboard (resizeToAvoidBottomInset: true), so a
+  // keyboard-sized inset would scroll the tapped line up under the app bar.
+  quill.QuillEditorConfig get _editorConfig => const quill.QuillEditorConfig(
         expands: true,
-        padding: EdgeInsets.fromLTRB(12, 16, 12, keyboardInset + 96),
-        scrollBottomInset: keyboardInset + 96,
-        embedBuilders: kIsWeb
-            ? FlutterQuillEmbeds.editorWebBuilders(
-                imageEmbedConfig: QuillEditorImageEmbedConfig(
-                  imageProviderBuilder: _imageProviderFromSource,
-                ),
-              )
-            : FlutterQuillEmbeds.editorBuilders(
-                imageEmbedConfig: QuillEditorImageEmbedConfig(
-                  imageProviderBuilder: _imageProviderFromSource,
-                ),
-              ),
-      ),
+        padding: EdgeInsets.all(8),
+        scrollBottomInset: 24,
+      );
+
+  Widget _buildCustomEditor() {
+    // Check if document has images
+    final plainText = _quillController.document.toPlainText();
+    final imagePattern = RegExp(r'📷 ([^\n]+)');
+    final hasImages = imagePattern.hasMatch(plainText);
+
+    if (!hasImages) {
+      // No images, just use regular editor
+      return quill.QuillEditor.basic(
+        controller: _quillController,
+        scrollController: _scrollController,
+        focusNode: _editorFocusNode,
+        config: _editorConfig,
+      );
+    }
+
+    // Has images, show editor with images below
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Main editable editor
+        Expanded(
+          child: quill.QuillEditor.basic(
+            controller: _quillController,
+            scrollController: _scrollController,
+            focusNode: _editorFocusNode,
+            config: _editorConfig,
+          ),
+        ),
+        // Images preview section with collapse/expand
+        _buildImagesPreview(),
+      ],
     );
   }
 
   // Build images preview section with collapse/expand
   Widget _buildImagesPreview() {
     final plainText = _quillController.document.toPlainText();
-    final imagePattern = RegExp(r'ðŸ“· ([^\n]+)');
+    final imagePattern = RegExp(r'📷 ([^\n]+)');
     final matches = imagePattern.allMatches(plainText);
 
     final imageFiles = <String>[];
@@ -331,7 +275,8 @@ class _NoteEditPageState extends State<NoteEditPage> {
               children: [
                 // Header with collapse button (down arrow)
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16.0, vertical: 8.0),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -381,7 +326,8 @@ class _NoteEditPageState extends State<NoteEditPage> {
                   });
                 },
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16.0, vertical: 8.0),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -447,10 +393,10 @@ class _NoteEditPageState extends State<NoteEditPage> {
                         height: 36,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: Colors.red.withOpacity(0.9),
+                          color: Colors.red.withValues(alpha: 0.9),
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.3),
+                              color: Colors.black.withValues(alpha: 0.3),
                               blurRadius: 4,
                               offset: const Offset(0, 2),
                             ),
@@ -487,15 +433,15 @@ class _NoteEditPageState extends State<NoteEditPage> {
 
       // Try different patterns to find the image reference
       final patterns = [
-        RegExp('\\nðŸ“· $escapedFileName\\n'), // With newlines
-        RegExp('ðŸ“· $escapedFileName\\n'), // With trailing newline
-        RegExp('\\nðŸ“· $escapedFileName'), // With leading newline
-        RegExp('ðŸ“· $escapedFileName'), // Without newlines
+        RegExp('\\n📷 $escapedFileName\\n'), // With newlines
+        RegExp('📷 $escapedFileName\\n'), // With trailing newline
+        RegExp('\\n📷 $escapedFileName'), // With leading newline
+        RegExp('📷 $escapedFileName'), // Without newlines
       ];
 
       final plainText = _quillController.document.toPlainText();
       debugPrint("Document plain text length: ${plainText.length}");
-      debugPrint("Looking for: ðŸ“· $fileName");
+      debugPrint("Looking for: 📷 $fileName");
 
       RegExp? matchingPattern;
       for (final pattern in patterns) {
@@ -598,18 +544,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDarkMode = theme.brightness == Brightness.dark;
-    final toolbarIconTheme = QuillIconTheme(
-      iconButtonSelectedData: IconButtonData(
-        style: ButtonStyle(
-          backgroundColor:
-              WidgetStatePropertyAll(Colors.grey.shade300),
-          foregroundColor: const WidgetStatePropertyAll(Colors.black87),
-          overlayColor: const WidgetStatePropertyAll(Colors.black12),
-        ),
-      ),
-    );
-    final toolbarBaseOptions =
-        QuillToolbarBaseButtonOptions(iconTheme: toolbarIconTheme);
 
     return Scaffold(
       appBar: GlossyAppBar(
@@ -626,15 +560,9 @@ class _NoteEditPageState extends State<NoteEditPage> {
             : Colors.blue.withValues(alpha: 0.3),
         elevation: 0,
       ),
-      resizeToAvoidBottomInset: false,
-      body: AnimatedPadding(
-        duration: const Duration(milliseconds: 180),
-        curve: Curves.easeOut,
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom,
-        ),
-        child: SafeArea(
-          child: Column(
+      resizeToAvoidBottomInset: true,
+      body: SafeArea(
+        child: Column(
           children: [
             // Title input with improved styling
             Container(
@@ -690,34 +618,35 @@ class _NoteEditPageState extends State<NoteEditPage> {
             ),
             // Rich Text Toolbar with improved design
             Container(
-                decoration: BoxDecoration(
-                  color: isDarkMode ? Colors.grey.shade900 : Colors.grey.shade100,
-                  border: Border(
-                    top: BorderSide(
-                      color: isDarkMode
-                          ? Colors.grey.shade700
-                          : Colors.grey.shade300,
-                      width: 1,
-                    ),
+              height: 155,
+              decoration: BoxDecoration(
+                color: isDarkMode ? Colors.grey.shade900 : Colors.grey.shade100,
+                border: Border(
+                  top: BorderSide(
+                    color: isDarkMode
+                        ? Colors.grey.shade700
+                        : Colors.grey.shade300,
+                    width: 1,
                   ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.1),
-                      blurRadius: 4,
-                      offset: const Offset(0, -2),
-                    ),
-                  ],
                 ),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 6.0),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.1),
+                    blurRadius: 4,
+                    offset: const Offset(0, -2),
+                  ),
+                ],
+              ),
+              child: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.all(12.0),
+                  child: Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
                     children: [
                       quill.QuillToolbarHistoryButton(
                         isUndo: true,
                         controller: _quillController,
-                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarHistoryButtonOptions(
                           iconData: Icons.undo,
                           iconSize: 22,
@@ -726,7 +655,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarHistoryButton(
                         isUndo: false,
                         controller: _quillController,
-                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarHistoryButtonOptions(
                           iconData: Icons.redo,
                           iconSize: 22,
@@ -735,7 +663,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.bold,
                         controller: _quillController,
-                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_bold,
                           iconSize: 22,
@@ -744,7 +671,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.italic,
                         controller: _quillController,
-                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_italic,
                           iconSize: 22,
@@ -753,7 +679,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.underline,
                         controller: _quillController,
-                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_underline,
                           iconSize: 22,
@@ -761,7 +686,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       ),
                       quill.QuillToolbarClearFormatButton(
                         controller: _quillController,
-                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarClearFormatButtonOptions(
                           iconData: Icons.format_clear,
                           iconSize: 22,
@@ -770,7 +694,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarColorButton(
                         controller: _quillController,
                         isBackground: false,
-                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarColorButtonOptions(
                           iconData: Icons.color_lens,
                           iconSize: 22,
@@ -779,7 +702,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarColorButton(
                         controller: _quillController,
                         isBackground: true,
-                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarColorButtonOptions(
                           iconData: Icons.format_color_fill,
                           iconSize: 22,
@@ -787,20 +709,14 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       ),
                       quill.QuillToolbarSelectHeaderStyleDropdownButton(
                         controller: _quillController,
-                        baseOptions: toolbarBaseOptions,
                         options:
                             const QuillToolbarSelectHeaderStyleDropdownButtonOptions(
                           iconSize: 22,
                         ),
                       ),
-                      quill.QuillToolbarFontSizeButton(
-                        controller: _quillController,
-                        baseOptions: toolbarBaseOptions,
-                      ),
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.ol,
                         controller: _quillController,
-                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_list_numbered,
                           iconSize: 22,
@@ -809,7 +725,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.ul,
                         controller: _quillController,
-                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_list_bulleted,
                           iconSize: 22,
@@ -818,7 +733,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.leftAlignment,
                         controller: _quillController,
-                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_align_left,
                           iconSize: 22,
@@ -827,7 +741,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.centerAlignment,
                         controller: _quillController,
-                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_align_center,
                           iconSize: 22,
@@ -836,7 +749,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.rightAlignment,
                         controller: _quillController,
-                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_align_right,
                           iconSize: 22,
@@ -845,7 +757,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.justifyAlignment,
                         controller: _quillController,
-                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.format_align_justify,
                           iconSize: 22,
@@ -854,12 +765,12 @@ class _NoteEditPageState extends State<NoteEditPage> {
                       quill.QuillToolbarToggleStyleButton(
                         attribute: quill.Attribute.codeBlock,
                         controller: _quillController,
-                        baseOptions: toolbarBaseOptions,
                         options: const QuillToolbarToggleStyleButtonOptions(
                           iconData: Icons.code,
                           iconSize: 22,
                         ),
                       ),
+                      // Image picker buttons
                       IconButton(
                         onPressed: _pickImageFromGallery,
                         icon: const Icon(Icons.photo_library, size: 22),
@@ -871,21 +782,18 @@ class _NoteEditPageState extends State<NoteEditPage> {
                         tooltip: 'Take photo with camera',
                       ),
                       IconButton(
-                        onPressed: () {
-                          _editorFocusNode.requestFocus();
-                          _showSnackBar('Images are now embedded in the note');
-                        },
+                        onPressed: _showImageGallery,
                         icon: const Icon(Icons.image, size: 22),
-                        tooltip: 'Images are embedded directly in the note',
+                        tooltip: 'View all images in note',
                       ),
                     ],
                   ),
                 ),
               ),
+            ),
           ],
         ),
-          ),
-        ),
+      ),
     );
   }
 
@@ -907,10 +815,6 @@ class _NoteEditPageState extends State<NoteEditPage> {
                   updatedDescription, // Save Quill JSON format as a string
             ),
           );
-      // Mark clean so dispose() doesn't fire a duplicate autosave.
-      _lastSavedJson = updatedDescription;
-      _lastSavedTitle = updatedTitle;
-      _isDirty = false;
       Navigator.of(context).pop(); // Go back after saving
     }
   }
@@ -1144,5 +1048,3 @@ class _ImageGalleryScreenState extends State<ImageGalleryScreen> {
     );
   }
 }
-
-

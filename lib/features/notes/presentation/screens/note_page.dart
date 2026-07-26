@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_quill/flutter_quill.dart' as quill;
 import 'package:flutter_quill_extensions/flutter_quill_extensions.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:greate_note_app/core/storage/note_image_storage.dart';
 import 'package:greate_note_app/core/widgets/glossy_app_bar.dart';
 import 'package:path_provider/path_provider.dart';
@@ -50,8 +51,12 @@ class _NotePageState extends State<NotePage> {
   final Map<String, GlobalKey> _searchMatchKeys = {};
   final Set<String> _centeredSearchMatchTargets = {};
   final TextEditingController _searchController = TextEditingController();
+  final Map<int, quill.QuillController> _readControllers = {};
+  final Map<int, String> _readControllerDescriptions = {};
   List<Map<String, dynamic>> _filteredNotes = [];
   List<Map<String, dynamic>> _allNotes = [];
+  late final FlutterTts _flutterTts;
+  int? _speakingNoteId;
   bool _isSearching = false;
 
   @override
@@ -63,6 +68,8 @@ class _NotePageState extends State<NotePage> {
     if (widget.initialExpandedNoteId != null) {
       _expandedNotes.add(widget.initialExpandedNoteId!);
     }
+    _flutterTts = FlutterTts();
+    _configureTextToSpeech();
     // FIXED: Load notes once in initState instead of in build()
     context.read<NoteBloc>().add(LoadNotes(folderId: widget.folderId));
   }
@@ -70,7 +77,36 @@ class _NotePageState extends State<NotePage> {
   @override
   void dispose() {
     _searchController.dispose();
+    for (final controller in _readControllers.values) {
+      controller.dispose();
+    }
+    _flutterTts.stop();
     super.dispose();
+  }
+
+  Future<void> _configureTextToSpeech() async {
+    try {
+      await _flutterTts.awaitSpeakCompletion(false);
+      await _flutterTts.setLanguage('en-US');
+      await _flutterTts.setSpeechRate(0.45);
+      await _flutterTts.setVolume(1.0);
+      await _flutterTts.setPitch(1.0);
+      _flutterTts.setCompletionHandler(_clearSpeakingNote);
+      _flutterTts.setCancelHandler(_clearSpeakingNote);
+      _flutterTts.setErrorHandler((message) {
+        debugPrint('Text to speech error: $message');
+        _clearSpeakingNote();
+      });
+    } catch (e) {
+      debugPrint('Unable to configure text to speech: $e');
+    }
+  }
+
+  void _clearSpeakingNote() {
+    if (!mounted) return;
+    setState(() {
+      _speakingNoteId = null;
+    });
   }
 
   void _filterNotes(String query) {
@@ -233,36 +269,51 @@ class _NotePageState extends State<NotePage> {
 
   // Build read-only note content, rendering embedded images (file refs or
   // legacy base64) via the shared image provider so it matches the editor.
-  Widget _buildNoteContent(String description, ThemeData theme) {
+  Widget _buildNoteContent(int noteId, String description, ThemeData theme) {
     try {
-      final List<dynamic> content = jsonDecode(description) as List<dynamic>;
-      final doc = quill.Document.fromJson(content);
-      final controller = quill.QuillController(
-        document: doc,
-        selection: const TextSelection.collapsed(offset: 0),
-      );
-      controller.readOnly = true;
+      final controller = _readControllerFor(noteId, description);
 
-      return IgnorePointer(
-        child: quill.QuillEditor.basic(
-          controller: controller,
-          config: quill.QuillEditorConfig(
-            scrollable: false,
-            expands: false,
-            padding: EdgeInsets.zero,
-            enableInteractiveSelection: false,
-            embedBuilders: kIsWeb
-                ? FlutterQuillEmbeds.editorWebBuilders(
-                    imageEmbedConfig: QuillEditorImageEmbedConfig(
-                      imageProviderBuilder: NoteImageStorage.providerFor,
-                    ),
-                  )
-                : FlutterQuillEmbeds.editorBuilders(
-                    imageEmbedConfig: QuillEditorImageEmbedConfig(
-                      imageProviderBuilder: NoteImageStorage.providerFor,
-                    ),
+      // Read-only but still selectable: no IgnorePointer, interactive selection
+      // on. The controller is readOnly so text can't be edited, but the user can
+      // long-press to select and copy without opening edit mode.
+      return quill.QuillEditor.basic(
+        controller: controller,
+        config: quill.QuillEditorConfig(
+          scrollable: false,
+          expands: false,
+          padding: EdgeInsets.zero,
+          enableInteractiveSelection: true,
+          contextMenuBuilder: (context, rawEditorState) {
+            final buttonItems = <ContextMenuButtonItem>[
+              if (!controller.selection.isCollapsed)
+                ContextMenuButtonItem(
+                  label: 'Speak',
+                  onPressed: () {
+                    rawEditorState.hideToolbar();
+                    _speakNote(noteId, description);
+                  },
+                ),
+              ...rawEditorState.contextMenuButtonItems,
+            ];
+
+            return TextFieldTapRegion(
+              child: AdaptiveTextSelectionToolbar.buttonItems(
+                buttonItems: buttonItems,
+                anchors: rawEditorState.contextMenuAnchors,
+              ),
+            );
+          },
+          embedBuilders: kIsWeb
+              ? FlutterQuillEmbeds.editorWebBuilders(
+                  imageEmbedConfig: QuillEditorImageEmbedConfig(
+                    imageProviderBuilder: NoteImageStorage.providerFor,
                   ),
-          ),
+                )
+              : FlutterQuillEmbeds.editorBuilders(
+                  imageEmbedConfig: QuillEditorImageEmbedConfig(
+                    imageProviderBuilder: NoteImageStorage.providerFor,
+                  ),
+                ),
         ),
       );
     } catch (e) {
@@ -272,6 +323,85 @@ class _NotePageState extends State<NotePage> {
         style: theme.textTheme.bodyMedium,
       );
     }
+  }
+
+  quill.QuillController _readControllerFor(int noteId, String description) {
+    final existingController = _readControllers[noteId];
+    if (existingController != null &&
+        _readControllerDescriptions[noteId] == description) {
+      return existingController;
+    }
+
+    existingController?.dispose();
+
+    final List<dynamic> content = jsonDecode(description) as List<dynamic>;
+    final doc = quill.Document.fromJson(content);
+    final controller = quill.QuillController(
+      document: doc,
+      selection: const TextSelection.collapsed(offset: 0),
+    );
+    controller.readOnly = true;
+    _readControllers[noteId] = controller;
+    _readControllerDescriptions[noteId] = description;
+    return controller;
+  }
+
+  Future<void> _speakNote(int noteId, String description) async {
+    if (_speakingNoteId == noteId) {
+      await _stopSpeaking();
+      return;
+    }
+
+    final selectedText = _selectedReadText(noteId);
+    final textToSpeak = selectedText.isNotEmpty
+        ? selectedText
+        : _descriptionToPlainText(description);
+    final cleanedText = textToSpeak.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+    if (cleanedText.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No note text to read.')),
+      );
+      return;
+    }
+
+    try {
+      await _flutterTts.stop();
+      if (!mounted) return;
+      setState(() {
+        _speakingNoteId = noteId;
+      });
+      await _flutterTts.speak(cleanedText);
+    } catch (e) {
+      debugPrint('Unable to speak note: $e');
+      if (!mounted) return;
+      setState(() {
+        _speakingNoteId = null;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to read this note aloud.')),
+      );
+    }
+  }
+
+  Future<void> _stopSpeaking() async {
+    await _flutterTts.stop();
+    if (!mounted) return;
+    setState(() {
+      _speakingNoteId = null;
+    });
+  }
+
+  String _selectedReadText(int noteId) {
+    final controller = _readControllers[noteId];
+    if (controller == null || controller.selection.isCollapsed) return '';
+
+    final plainText = controller.document.toPlainText();
+    final start = controller.selection.start.clamp(0, plainText.length);
+    final end = controller.selection.end.clamp(0, plainText.length);
+    if (start >= end) return '';
+
+    return plainText.substring(start, end).trim();
   }
 
   @override
@@ -390,7 +520,9 @@ class _NotePageState extends State<NotePage> {
                           ScrollController();
 
                       final note = notesToDisplay[index];
+                      final noteId = note['id'] as int;
                       final isExpanded = _expandedNotes.contains(note['id']);
+                      final isSpeaking = _speakingNoteId == noteId;
                       return Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 8.0),
                         child: Card(
@@ -432,6 +564,24 @@ class _NotePageState extends State<NotePage> {
                                           );
                                         },
                                       ),
+                                    if (isExpanded)
+                                      IconButton(
+                                        icon: Icon(
+                                          isSpeaking
+                                              ? Icons.stop_circle_outlined
+                                              : Icons.volume_up_outlined,
+                                          color: theme.iconTheme.color,
+                                        ),
+                                        onPressed: () {
+                                          _speakNote(
+                                            noteId,
+                                            note['description'] ?? '',
+                                          );
+                                        },
+                                        tooltip: isSpeaking
+                                            ? 'Stop reading'
+                                            : 'Read selected text or note',
+                                      ),
                                     IconButton(
                                       icon: Icon(
                                         isExpanded
@@ -452,7 +602,7 @@ class _NotePageState extends State<NotePage> {
                                     IconButton(
                                       icon: Icon(Icons.delete,
                                           color: theme.iconTheme.color),
-                                    onPressed: () {
+                                      onPressed: () {
                                         _confirmDeleteNote(context, note);
                                       },
                                     ),
@@ -498,14 +648,16 @@ class _NotePageState extends State<NotePage> {
                                           const SizedBox(height: 8),
                                           if (_searchHighlightQuery.isNotEmpty)
                                             _buildSearchMatchNavigator(
-                                              noteId: note['id'] as int,
+                                              noteId: noteId,
                                               description:
                                                   note['description'] ?? '',
                                               theme: theme,
                                             )
-                                          else if (note['description'] != null &&
+                                          else if (note['description'] !=
+                                                  null &&
                                               note['description'].isNotEmpty)
                                             _buildNoteContent(
+                                              noteId,
                                               note['description'],
                                               theme,
                                             )
@@ -634,8 +786,8 @@ class _NotePageState extends State<NotePage> {
       return const SizedBox.shrink();
     }
 
-    final activeIndex =
-        (_activeSearchMatchIndexByNote[noteId] ?? 0).clamp(0, matches.length - 1);
+    final activeIndex = (_activeSearchMatchIndexByNote[noteId] ?? 0)
+        .clamp(0, matches.length - 1);
     final activeTargetKey = '$noteId:$activeIndex:$query';
     final activeMatchKey = _searchMatchKeyFor(activeTargetKey);
 
@@ -699,19 +851,21 @@ class _NotePageState extends State<NotePage> {
           constraints: BoxConstraints(
             maxWidth: MediaQuery.of(context).size.width * 0.95,
           ),
-          child: RichText(
-            textAlign: TextAlign.start,
-            text: TextSpan(
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.textTheme.bodyMedium?.color,
-                height: 1.45,
-              ),
-              children: _buildHighlightedFullTextSpans(
-                text: _descriptionToPlainText(description),
-                query: query,
-                activeMatchIndex: activeIndex,
-                activeMatchKey: activeMatchKey,
-                baseStyle: theme.textTheme.bodyMedium ?? const TextStyle(),
+          child: SelectionArea(
+            child: RichText(
+              textAlign: TextAlign.start,
+              text: TextSpan(
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.textTheme.bodyMedium?.color,
+                  height: 1.45,
+                ),
+                children: _buildHighlightedFullTextSpans(
+                  text: _descriptionToPlainText(description),
+                  query: query,
+                  activeMatchIndex: activeIndex,
+                  activeMatchKey: activeMatchKey,
+                  baseStyle: theme.textTheme.bodyMedium ?? const TextStyle(),
+                ),
               ),
             ),
           ),
@@ -930,8 +1084,8 @@ class _NotePageState extends State<NotePage> {
           builder: (context, setDialogState) {
             return AlertDialog(
               backgroundColor: Theme.of(context).brightness == Brightness.dark
-              ? Colors.grey.shade900
-              : Colors.white,
+                  ? Colors.grey.shade900
+                  : Colors.white,
               title: const Text('Edit Folder'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,

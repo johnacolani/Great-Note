@@ -1,0 +1,144 @@
+name: CI & Deploy
+
+# CI (analyze + test) runs on every push/PR to main.
+# Deploy to TestFlight + Play internal runs ONLY when you push a version tag,
+# e.g.  git tag v2.5.1 && git push origin v2.5.1
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+env:
+  FLUTTER_VERSION: '3.44.2'
+  ANDROID_PACKAGE: com.johncolani.greate_note_app
+  IOS_BUNDLE_ID: com.johncolani.infiniteNotesPlus
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Always: static analysis + tests + a signing-free build smoke test.
+  # ---------------------------------------------------------------------------
+  ci:
+    name: Analyze & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - name: Smoke build (no signing)
+        run: flutter build appbundle --debug
+
+  # ---------------------------------------------------------------------------
+  # Tag only: build signed AAB and upload to Play internal testing track.
+  # ---------------------------------------------------------------------------
+  android-deploy:
+    name: Android → Play (internal)
+    needs: ci
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # needed for git rev-list build number
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Decode upload keystore
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
+
+      - name: Write key.properties
+        run: |
+          cat > android/key.properties <<EOF
+          storeFile=upload-keystore.jks
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          EOF
+
+      - name: Compute version
+        id: ver
+        run: |
+          echo "name=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "build=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+
+      - run: flutter pub get
+
+      - name: Build AAB
+        run: >
+          flutter build appbundle --release
+          --build-name=${{ steps.ver.outputs.name }}
+          --build-number=${{ steps.ver.outputs.build }}
+
+      - name: Upload to Play internal
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: ${{ env.ANDROID_PACKAGE }}
+          releaseFiles: build/app/outputs/bundle/release/app-release.aab
+          track: internal
+          status: completed
+
+  # ---------------------------------------------------------------------------
+  # Tag only: build signed IPA via fastlane match and upload to TestFlight.
+  # ---------------------------------------------------------------------------
+  ios-deploy:
+    name: iOS → TestFlight
+    needs: ci
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+          bundler-cache: true
+          working-directory: ios
+
+      - name: Restore App Store Connect API key (.p8)
+        run: echo "${{ secrets.ASC_KEY_P8_BASE64 }}" | base64 --decode > ios/fastlane/asc_api_key.p8
+
+      - name: Compute version
+        id: ver
+        run: |
+          echo "name=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "build=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+
+      - run: flutter pub get
+
+      # Compile the Flutter/Xcode project (unsigned); fastlane re-archives with signing.
+      - name: Flutter iOS precompile
+        run: >
+          flutter build ios --release --no-codesign
+          --build-name=${{ steps.ver.outputs.name }}
+          --build-number=${{ steps.ver.outputs.build }}
+
+      - name: Fastlane beta (match + build + TestFlight)
+        working-directory: ios
+        env:
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_PATH: ${{ github.workspace }}/ios/fastlane/asc_api_key.p8
+        run: bundle exec fastlane beta
